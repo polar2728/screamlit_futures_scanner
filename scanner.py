@@ -2,6 +2,7 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import time as time
 from datetime import datetime
 
 # ==========================
@@ -80,6 +81,8 @@ def atr(df, length=14):
 results = []
 scan_time = datetime.now()
 
+symbols_list = list(SYMBOL_MAP.values())
+
 for name, symbol in SYMBOL_MAP.items():
     try:
         df = yf.download(
@@ -89,7 +92,7 @@ for name, symbol in SYMBOL_MAP.items():
             auto_adjust=True,
             progress=False
         )
-
+        time.sleep(1.5)
         if df.empty or len(df) < 60:
             continue
 
@@ -166,7 +169,6 @@ for name, symbol in SYMBOL_MAP.items():
         confidence = min(100, abs(score) * 20)
 
         results.append({
-            "Scan_Time": scan_time,
             "Instrument": name,
             "Prev_Candle": prev_candle,
             "Current_Candle": curr_candle,
@@ -195,6 +197,14 @@ if report.empty:
     print("No valid signals today.")
 else:
     report = report.sort_values(["Confidence_%", "Vol_Ratio"], ascending=False)
+
+    print("\n===== STRONG BUY =====")
+    print(report[report["Verdict"] == "STRONG BUY"].to_string(index=False))
+
+    print("\n===== STRONG SELL =====")
+    print(report[report["Verdict"] == "STRONG SELL"].to_string(index=False))
+
+    print("\n===== FULL REPORT =====")
     print(report.to_string(index=False))
 
     fname = f"HA_Daily_Scanner_{scan_time.strftime('%Y%m%d_%H%M')}.csv"
