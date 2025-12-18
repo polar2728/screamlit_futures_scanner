@@ -63,18 +63,18 @@ if st.button("🔄 Run Scanner Now"):
             (report["Confidence_%"] >= min_conf)
         ]
 
-        st.dataframe(filtered, use_container_width=True, hide_index=True)
+        st.dataframe(report, use_container_width=True, hide_index=True)
 
         # Summary metrics
         c1, c2, c3 = st.columns(3)
-        c1.metric("Total Signals", len(filtered))
-        c2.metric("Strong Buys", (filtered["Verdict"] == "STRONG BUY").sum())
-        c3.metric("Strong Sells", (filtered["Verdict"] == "STRONG SELL").sum())
+        c1.metric("Total Signals", len(report))
+        c2.metric("Strong Buys", (report["Verdict"] == "STRONG BUY").sum())
+        c3.metric("Strong Sells", (report["Verdict"] == "STRONG SELL").sum())
 
         # Download
-        csv = filtered.to_csv(index=False).encode()
+        csv = report.to_csv(index=False).encode()
         st.download_button(
-            "📥 Download Filtered CSV",
+            "📥 Download Report CSV",
             csv,
             f"HA_Scanner_{datetime.now().date()}.csv",
             "text/csv"
