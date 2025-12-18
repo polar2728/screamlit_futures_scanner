@@ -1,0 +1,6 @@
+streamlit
+streamlit-authenticator
+pandas
+numpy
+yfinance
+pyyaml
