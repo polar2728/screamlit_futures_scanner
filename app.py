@@ -1,77 +1,81 @@
 # app.py
 import streamlit as st
+import bcrypt
 import pandas as pd
-import yaml
-import streamlit_authenticator as stauth
-from pathlib import Path
+from datetime import datetime
+from scanner import run_scanner  # Import the function
 
+# MUST BE FIRST
 st.set_page_config(page_title="HA Daily Scanner", layout="wide")
 
 # ==========================
-# AUTH
+# SIMPLE LOGIN (bcrypt + secrets)
 # ==========================
-with open("users.yaml") as f:
-    config = yaml.safe_load(f)
+def check_login():
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
 
-authenticator = stauth.Authenticate(
-    config["credentials"],
-    cookie_name="ha_scanner",
-    key="secure_key_123",
-    cookie_expiry_days=7
-)
+    if st.session_state.authenticated:
+        return True
 
-name, auth_status, username = authenticator.login("Login", "main")
+    st.title("🔐 Login Required")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
-if auth_status is False:
-    st.error("Invalid username or password")
-elif auth_status is None:
-    st.warning("Please login")
-else:
-    authenticator.logout("Logout", "sidebar")
+    if st.button("Login"):
+        if username == st.secrets["auth"]["user_name"]:
+            stored_hash = st.secrets["auth"]["password"].encode()
+            if bcrypt.checkpw(password.encode(), stored_hash):
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Invalid password")
+        else:
+            st.error("Invalid username")
+    return False
 
-    st.title("📊 Heikin Ashi Daily Scanner")
-    st.caption("Spot-based | End-of-Day | Risk-aware")
+if not check_login():
+    st.stop()
 
-    # ==========================
-    # LOAD LATEST REPORT
-    # ==========================
-    files = sorted(Path(".").glob("HA_Daily_Scanner_*.csv"), reverse=True)
+# ==========================
+# MAIN APP
+# ==========================
+st.title("📊 Heikin Ashi Daily Futures Scanner")
+st.caption("End-of-Day | Risk-Aware | 18 Symbols")
 
-    if not files:
-        st.warning("No scan reports found. Run scanner.py first.")
-        st.stop()
+if st.button("🔄 Run Scanner Now"):
+    with st.spinner("Fetching data and calculating signals... (~20-30 seconds)"):
+        report = run_scanner()
 
-    df = pd.read_csv(files[0])
+    if report.empty:
+        st.info("No signals generated today.")
+    else:
+        st.success(f"Scan complete – {len(report)} results")
 
-    st.success(f"Loaded report: {files[0].name}")
+        # Filters
+        col1, col2 = st.columns(2)
+        verdict_options = report["Verdict"].unique()
+        selected_verdicts = col1.multiselect("Verdict", verdict_options, default=["STRONG BUY", "STRONG SELL"])
+        min_conf = col2.slider("Min Confidence %", 0, 100, 40)
 
-    # ==========================
-    # FILTERS
-    # ==========================
-    verdict_filter = st.multiselect(
-        "Filter Verdict",
-        df["Verdict"].unique(),
-        default=["STRONG BUY", "STRONG SELL"]
-    )
+        filtered = report[
+            report["Verdict"].isin(selected_verdicts) &
+            (report["Confidence_%"] >= min_conf)
+        ]
 
-    min_conf = st.slider("Minimum Confidence %", 0, 100, 40)
+        st.dataframe(filtered, use_container_width=True, hide_index=True)
 
-    filtered = df[
-        (df["Verdict"].isin(verdict_filter)) &
-        (df["Confidence_%"] >= min_conf)
-    ]
+        # Summary metrics
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Signals", len(filtered))
+        c2.metric("Strong Buys", (filtered["Verdict"] == "STRONG BUY").sum())
+        c3.metric("Strong Sells", (filtered["Verdict"] == "STRONG SELL").sum())
 
-    # ==========================
-    # DISPLAY
-    # ==========================
-    st.dataframe(
-        filtered,
-        use_container_width=True,
-        hide_index=True
-    )
-
-    st.markdown("### 🔎 Summary")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Signals", len(filtered))
-    col2.metric("Strong Buys", (filtered["Verdict"] == "STRONG BUY").sum())
-    col3.metric("Strong Sells", (filtered["Verdict"] == "STRONG SELL").sum())
+        # Download
+        csv = filtered.to_csv(index=False).encode()
+        st.download_button(
+            "📥 Download Filtered CSV",
+            csv,
+            f"HA_Scanner_{datetime.now().date()}.csv",
+            "text/csv"
+        )
