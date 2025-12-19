@@ -53,15 +53,15 @@ if st.button("🔄 Run Scanner Now"):
         st.success(f"Scan complete – {len(report)} results")
 
         # Filters
-        col1, col2 = st.columns(2)
-        verdict_options = report["Verdict"].unique()
-        selected_verdicts = col1.multiselect("Verdict", verdict_options, default=["STRONG BUY", "STRONG SELL"])
-        min_conf = col2.slider("Min Confidence %", 0, 100, 40)
+        # col1, col2 = st.columns(2)
+        # verdict_options = report["Verdict"].unique()
+        # selected_verdicts = col1.multiselect("Verdict", verdict_options, default=["STRONG BUY", "STRONG SELL"])
+        # min_conf = col2.slider("Min Confidence %", 0, 100, 40)
 
-        filtered = report[
-            report["Verdict"].isin(selected_verdicts) &
-            (report["Confidence_%"] >= min_conf)
-        ]
+        # filtered = report[
+        #     report["Verdict"].isin(selected_verdicts) &
+        #     (report["Confidence_%"] >= min_conf)
+        # ]
 
         st.dataframe(report, use_container_width=True, hide_index=True)
 
