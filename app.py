@@ -75,26 +75,14 @@ if report.empty:
 else:
     st.success(f"Scan complete – {len(report)} results found")
 
-    # Color verdict
-    def color_verdict(val):
-        color = {
-            "STRONG BUY": "inverse",
-            "STRONG SELL": "inverse",
-            "WEAK BUY": "normal",
-            "WEAK SELL": "normal"
-        }.get(val, "off")
-        return f"background-color: {'green' if 'BUY' in val else 'red' if 'SELL' in val else 'gray'}"
-
-    styled = report.style.map(color_verdict, subset=["Verdict"])
-
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(report, use_container_width=True, hide_index=True)
 
     # Metrics
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Signals", len(report))
-    col2.metric("Strong Buys", (report["Verdict"] == "STRONG BUY").sum())
-    col3.metric("Strong Sells", (report["Verdict"] == "STRONG SELL").sum())
-    col4.metric("Confidence Avg", f"{report['Confidence_%'].mean():.1f}%")
+    col2.metric("Strong Buys", (report["Final_Conviction"] == "HIGH BULLISH").sum())
+    col3.metric("Strong Sells", (report["Final_Conviction"] == "HIGH BEARISH").sum())
+    col4.metric("Confidence Avg", f"{report['Conf%'].mean():.1f}%")
 
     # Download
     csv = report.to_csv(index=False).encode()

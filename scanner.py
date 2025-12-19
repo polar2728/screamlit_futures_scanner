@@ -21,11 +21,13 @@ EMA_SLOW = 50
 ATR_LEN = 14
 DONCHIAN_LEN = 5
 
-# Common futures universe
+INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY"}
+
+# Common stock futures universe
 TICKERS = [
-    "NIFTY", "BANKNIFTY", "RELIANCE", "HDFCBANK", "ICICIBANK", "AXISBANK", "SBI",
+    "RELIANCE", "HDFCBANK", "ICICIBANK", "AXISBANK", "SBIN",
     "INFY", "TCS", "ITC", "HINDUNILVR", "BHARTIARTL", "LT", "KOTAKBANK",
-    "TMPV", "TATASTEEL", "COALINDIA", "ASIANPAINTS", "MARUTI", "DRREDDY",
+    "TATASTEEL", "COALINDIA", "ASIANPAINT", "MARUTI", "DRREDDY",
     "TATAPOWER", "INDIGO", "ULTRACEMCO", "ONGC"
 ]
 
@@ -37,7 +39,7 @@ SYMBOL_MAP = {
     "HDFCBANK": "HDFCBANK.NS",
     "ICICIBANK": "ICICIBANK.NS",
     "AXISBANK": "AXISBANK.NS",
-    "SBI": "SBIN.NS",
+    "SBIN": "SBIN.NS",
     "INFY": "INFY.NS",
     "TCS": "TCS.NS",
     "ITC": "ITC.NS",
@@ -45,10 +47,9 @@ SYMBOL_MAP = {
     "BHARTIARTL": "BHARTIARTL.NS",
     "LT": "LT.NS",
     "KOTAKBANK": "KOTAKBANK.NS",
-    "TMPV": "TMPV.NS",        # adjust if Yahoo ticker differs
     "TATASTEEL": "TATASTEEL.NS",
     "COALINDIA": "COALINDIA.NS",
-    "ASIANPAINTS": "ASIANPAINT.NS",
+    "ASIANPAINT": "ASIANPAINT.NS",
     "MARUTI": "MARUTI.NS",
     "DRREDDY": "DRREDDY.NS",
     "TATAPOWER": "TATAPOWER.NS",
@@ -271,16 +272,32 @@ def load_bhavcopies():
     cm_df = try_download_cm_udiff(session)
     return fo_df, cm_df
 
+
 def get_near_month_future(fo_df, symbol):
+    """
+    UDiFF mapping:
+    - STF: Futures Stock (FUTSTK)
+    - IDF: Index Futures (FUTIDX)
+    - TckrSymb: underlying symbol (e.g. RELIANCE, NIFTY)
+    - XpryDt: expiry date
+    """
+    sym = symbol.upper()
+
+    inst_type = "IDF" if sym in INDEX_SYMBOLS else "STF"
+
     fut = fo_df[
-        (fo_df["FinInstrmTp"].astype(str).str.strip().str.upper() == "STF") &
-        (fo_df["TckrSymb"].astype(str).str.strip().str.upper() == symbol.upper())
+        (fo_df["FinInstrmTp"].astype(str).str.strip().str.upper() == inst_type) &
+        (fo_df["TckrSymb"].astype(str).str.strip().str.upper() == sym)
     ].copy()
+
     if fut.empty:
         return None
+
     fut["XpryDt"] = pd.to_datetime(fut["XpryDt"])
     fut = fut.sort_values("XpryDt")
+
     return fut.iloc[0]
+
 
 def futures_conviction(fut, spot_close):
     fut_close = fut["ClsPric"]
