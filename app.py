@@ -75,7 +75,8 @@ if report.empty:
 else:
     st.success(f"Scan complete – {len(report)} results found")
 
-    st.dataframe(report, use_container_width=True, hide_index=True)
+    # st.dataframe(report, use_container_width=True, hide_index=True)
+    st.dataframe(report, width=None, hide_index=True)
 
     # Metrics
     col1, col2, col3, col4 = st.columns(4)
