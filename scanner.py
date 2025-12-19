@@ -441,13 +441,21 @@ def run_scanner():
         axis=1
     )
 
-    merged["Fut_Score"] = merged.apply(
-        lambda row: score_futures_row(row["Bias"], row["Buildup"]),
-        axis=1
-    )
+        # For rows without futures (e.g. NIFTY/BANKNIFTY), Fut_Score will be 0
+    def safe_fut_score(row):
+        if pd.isna(row["Bias"]) or pd.isna(row["Buildup"]):
+            return 0.0
+        return score_futures_row(row["Bias"], row["Buildup"])
+
+    merged["Fut_Score"] = merged.apply(safe_fut_score, axis=1)
 
     merged["Final_Score"] = merged["Scan_Score"] + merged["Fut_Score"]
     merged["Final_Conviction"] = merged["Final_Score"].apply(label_total_conviction)
+
+    merged = merged.sort_values(
+        ["Final_Score", "Conf%", "Vol_Ratio"],
+        ascending=[False, False, False]
+    )
 
     merged = merged.sort_values(
         ["Final_Score", "Conf%", "Vol_Ratio"],
