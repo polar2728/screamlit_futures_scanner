@@ -1,81 +1,110 @@
-# app.py
 import streamlit as st
 import bcrypt
 import pandas as pd
-from datetime import datetime
-from scanner import run_scanner  # Import the function
-
-# MUST BE FIRST
-st.set_page_config(page_title="HA Daily Scanner", layout="wide")
+from datetime import datetime, date
+from scanner import run_scanner
 
 # ==========================
-# SIMPLE LOGIN (bcrypt + secrets)
+# PAGE CONFIG
 # ==========================
-def check_login():
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
+st.set_page_config(page_title="HA Daily Scanner", layout="wide", initial_sidebar_state="expanded")
 
-    if st.session_state.authenticated:
-        return True
+# ==========================
+# LOGIN
+# ==========================
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
 
-    st.title("🔐 Login Required")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-
-    if st.button("Login"):
-        if username == st.secrets["auth"]["user_name"]:
-            stored_hash = st.secrets["auth"]["password"].encode()
-            if bcrypt.checkpw(password.encode(), stored_hash):
-                st.session_state.authenticated = True
-                st.rerun()
+if not st.session_state.authenticated:
+    st.title("🔐 Login to HA Scanner")
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login")
+        if submitted:
+            if username == st.secrets["auth"]["user_name"]:
+                stored_hash = st.secrets["auth"]["password"].encode()
+                if bcrypt.checkpw(password.encode(), stored_hash):
+                    st.session_state.authenticated = True
+                    st.success("Logged in successfully!")
+                    st.rerun()
+                else:
+                    st.error("Invalid password")
             else:
-                st.error("Invalid password")
-        else:
-            st.error("Invalid username")
-    return False
-
-if not check_login():
+                st.error("Invalid username")
     st.stop()
+
+# ==========================
+# SIDEBAR (After Login)
+# ==========================
+with st.sidebar:
+    st.success("✅ Authenticated")
+    if st.button("Logout"):
+        st.session_state.authenticated = False
+        st.rerun()
+
+    st.markdown("### Scanner Controls")
+    auto_refresh = st.checkbox("Auto-refresh every 5 min", value=False)
+    st.markdown("### Last Run")
+    if "last_run" in st.session_state:
+        st.caption(st.session_state.last_run)
 
 # ==========================
 # MAIN APP
 # ==========================
 st.title("📊 Heikin Ashi Daily Futures Scanner")
-st.caption("End-of-Day | Risk-Aware | 18 Symbols")
+st.caption("End-of-Day | Risk-Aware | 24 Liquid Symbols")
 
-if st.button("🔄 Run Scanner Now"):
-    with st.spinner("Fetching data and calculating signals... (~20-30 seconds)"):
-        report = run_scanner()
+@st.cache_data(ttl=3600, show_spinner=False)  # Cache 1 hour
+def cached_scanner():
+    return run_scanner()
 
-    if report.empty:
-        st.info("No signals generated today.")
-    else:
-        st.success(f"Scan complete – {len(report)} results")
+# Run scanner
+if st.button("🔄 Run Scanner Now", type="primary") or ("last_run" not in st.session_state):
+    with st.spinner("Running scanner..."):
+        report = cached_scanner()
+    st.session_state.last_run = datetime.now().strftime("%Y-%m-%d %H:%M")
+    st.rerun()
 
-        # Filters
-        # col1, col2 = st.columns(2)
-        # verdict_options = report["Verdict"].unique()
-        # selected_verdicts = col1.multiselect("Verdict", verdict_options, default=["STRONG BUY", "STRONG SELL"])
-        # min_conf = col2.slider("Min Confidence %", 0, 100, 40)
+else:
+    report = cached_scanner()
 
-        # filtered = report[
-        #     report["Verdict"].isin(selected_verdicts) &
-        #     (report["Confidence_%"] >= min_conf)
-        # ]
+# Display results
+if report.empty:
+    st.info("No signals generated today.")
+else:
+    st.success(f"Scan complete – {len(report)} results found")
 
-        st.dataframe(report, use_container_width=True, hide_index=True)
+    # Color verdict
+    def color_verdict(val):
+        color = {
+            "STRONG BUY": "inverse",
+            "STRONG SELL": "inverse",
+            "WEAK BUY": "normal",
+            "WEAK SELL": "normal"
+        }.get(val, "off")
+        return f"background-color: {'green' if 'BUY' in val else 'red' if 'SELL' in val else 'gray'}"
 
-        # Summary metrics
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total Signals", len(report))
-        c2.metric("Strong Buys", (report["Verdict"] == "STRONG BUY").sum())
-        c3.metric("Strong Sells", (report["Verdict"] == "STRONG SELL").sum())
+    styled = report.style.map(color_verdict, subset=["Verdict"])
 
-        # Download
-        csv = report.to_csv(index=False).encode()
-        st.download_button(
-            "📥 Download Report CSV",
-            csv,
-            f"HA_Scanner_{datetime.now().date()}.csv",
-            "text/csv"
-        )
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    # Metrics
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Signals", len(report))
+    col2.metric("Strong Buys", (report["Verdict"] == "STRONG BUY").sum())
+    col3.metric("Strong Sells", (report["Verdict"] == "STRONG SELL").sum())
+    col4.metric("Confidence Avg", f"{report['Confidence_%'].mean():.1f}%")
+
+    # Download
+    csv = report.to_csv(index=False).encode()
+    st.download_button(
+        label="📥 Download CSV Report",
+        data=csv,
+        file_name=f"HA_Scanner_{date.today()}.csv",
+        mime="text/csv"
+    )
+
+# Auto-refresh (experimental)
+if auto_refresh:
+    st.autorefresh(interval=5*60*1000, key="auto")
