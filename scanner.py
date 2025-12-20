@@ -522,7 +522,6 @@ def run_scanner():
         "Scan_Score", "Fut_Score"
     ]
     merged = merged[[c for c in cols_order if c in merged.columns]]
-
     merged["Final_Conviction"] = merged.apply(
         lambda row: relabel_total_conviction(row["Final_Score"], row["Scan_Score"], row["Fut_Score"]),
         axis=1
