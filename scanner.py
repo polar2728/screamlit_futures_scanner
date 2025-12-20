@@ -418,6 +418,41 @@ def label_total_conviction(total: float) -> str:
     else:
         return "HIGH BEARISH"
 
+def relabel_total_conviction(total: float, scan_score: float, fut_score: float) -> str:
+    # Direction by total
+    if total > 0:
+        direction = "Buy"
+    elif total < 0:
+        direction = "Sell"
+    else:
+        direction = "Neutral"
+
+    # Strength by absolute total
+    abs_total = abs(total)
+    if abs_total >= 8:
+        strength = "Strong"
+    elif abs_total >= 4:
+        strength = "Moderate"
+    elif abs_total > 0:
+        strength = "Weak"
+    else:
+        strength = "Flat"
+
+    # Alignment between scanner and futures
+    if scan_score == 0 and fut_score == 0:
+        alignment = "No Signal"
+    elif scan_score * fut_score > 0:
+        alignment = "Aligned"
+    elif scan_score * fut_score < 0:
+        alignment = "Conflicting"
+    else:
+        alignment = "Scan Only" if fut_score == 0 else "Fut Only"
+
+    if direction == "Neutral" or strength == "Flat":
+        return "Neutral / No Edge"
+
+    return f"{strength} {direction} ({alignment})"
+
 # ==========================
 # DASHBOARD MERGE
 # ==========================
@@ -465,4 +500,21 @@ def run_scanner():
     # Drop columns you don't want in the dashboard
     cols_to_drop = ["Price", "Donchian_SL", "SL_Distance", "ATR", "Symbol"]
     merged = merged.drop(columns=[c for c in cols_to_drop if c in merged.columns])
+    
+    # Rearrange columns
+    cols_order = [
+        "Ticker", "Final_Conviction", "Final_Score",
+        "Prev HA", "Cur HA", "Trend", "Verdict", "Score", "Conf%", "RSI", "Vol_Ratio",
+        "Expiry", "Spot Close", "Fut Close", "Premium %", "OI Change", "Volume (Contracts)",
+        "Buildup", "Bias",
+        "Scan_Score", "Fut_Score"
+    ]
+    merged = merged[[c for c in cols_order if c in merged.columns]] 
+
+    # relabel final conviction
+    merged["Final_Conviction"] = merged.apply(
+        lambda row: relabel_total_conviction(row["Final_Score"], row["Scan_Score"], row["Fut_Score"]),
+        axis=1
+    )
+
     return merged

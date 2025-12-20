@@ -53,7 +53,7 @@ with st.sidebar:
 # MAIN APP
 # ==========================
 st.title("📊 Heikin Ashi Daily Futures Scanner")
-st.caption("End-of-Day | Risk-Aware | 24 Liquid Symbols")
+st.caption("End-of-Day | Risk-Aware | 23 Liquid Symbols")
 
 @st.cache_data(ttl=3600, show_spinner=False)  # Cache 1 hour
 def cached_scanner():
@@ -80,10 +80,16 @@ else:
 
     # Metrics
     col1, col2, col3, col4 = st.columns(4)
+    strong_buy = (report["Final_Score"] >= 8).sum()
+    strong_sell = (report["Final_Score"] <= -8).sum()
+    mod_buy = ((report["Final_Score"] >= 4) & (report["Final_Score"] < 8)).sum()
+    mod_sell = ((report["Final_Score"] >= -8) & (report["Final_Score"] < -4)).sum()
+
     col1.metric("Total Signals", len(report))
-    col2.metric("Strong Buys", (report["Final_Conviction"] == "HIGH BULLISH").sum())
-    col3.metric("Strong Sells", (report["Final_Conviction"] == "HIGH BEARISH").sum())
-    col4.metric("Confidence Avg", f"{report['Conf%'].mean():.1f}%")
+    col2.metric("Strong Ideas", strong_buy + strong_sell)
+    col3.metric("Moderate Ideas", mod_buy + mod_sell)
+    col4.metric("Net Edge", f"{(strong_buy + mod_buy) - (strong_sell + mod_sell):+}")
+
 
     # Download
     csv = report.to_csv(index=False).encode()
@@ -92,6 +98,20 @@ else:
         data=csv,
         file_name=f"HA_Scanner_{date.today()}.csv",
         mime="text/csv"
+    )
+
+    # assume df is your merged dashboard DataFrame
+    pinned_cols = ["Ticker", "Final_Conviction", "Final_Score"]
+
+    st.dataframe(
+        df,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            col: st.column_config.Column(pinned=True)
+            for col in pinned_cols
+            if col in df.columns
+        }
     )
 
 # Auto-refresh (experimental)
