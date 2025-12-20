@@ -469,7 +469,7 @@ def run_scanner():
         fut_df,
         left_on="Ticker",
         right_on="Symbol",
-        how="inner"
+        how="left"  # left join so NIFTY/BANKNIFTY stay even if no futures row
     )
 
     merged["Scan_Score"] = merged.apply(
