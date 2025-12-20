@@ -369,7 +369,7 @@ def run_futures_conviction():
 # ==========================
 # COMBINED CONVICTION SCORING
 # ==========================
-
+# logic converts the qualitative verdict + raw score into a single numeric score
 def score_scanner_row(verdict: str, score: int) -> int:
     if verdict == "STRONG BUY":
         base = 4
@@ -381,6 +381,7 @@ def score_scanner_row(verdict: str, score: int) -> int:
         base = -4
     else:
         base = 0
+    # Prevents raw score from overriding verdict:
     return base + max(-2, min(2, score))
 
 def score_futures_row(bias: str, buildup: str) -> float:

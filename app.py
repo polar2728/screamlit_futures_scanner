@@ -104,13 +104,13 @@ else:
     pinned_cols = ["Ticker", "Final_Conviction", "Final_Score"]
 
     st.dataframe(
-        df,
+        report,
         width="stretch",
         hide_index=True,
         column_config={
             col: st.column_config.Column(pinned=True)
             for col in pinned_cols
-            if col in df.columns
+            if col in report.columns
         }
     )
 
