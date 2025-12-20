@@ -73,7 +73,7 @@ def heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
             ha_open.append((ha_open[i-1] + df["HA_Close"].iloc[i-1]) / 2)
     df["HA_Open"] = ha_open
     df["HA_High"] = np.maximum(df["High"], np.maximum(df["HA_Open"], df["HA_Close"]))
-    df["HA_Low"]  = np.minimum(df["Low"],  np.minimum(df["HA_Open"], df["HA_Close"]))
+    df["HA_Low"] = np.minimum(df["Low"], np.minimum(df["HA_Open"], df["HA_Close"]))
     return df
 
 def rsi(series: pd.Series, length: int = 14) -> pd.Series:
@@ -120,8 +120,8 @@ def run_ha_scanner() -> pd.DataFrame:
             ha = heikin_ashi(df)
             ha["EMA20"] = ha["HA_Close"].ewm(span=EMA_FAST, adjust=False).mean()
             ha["EMA50"] = ha["HA_Close"].ewm(span=EMA_SLOW, adjust=False).mean()
-            ha["RSI"]   = rsi(ha["HA_Close"], RSI_LEN)
-            ha["ATR"]   = atr(df, ATR_LEN)
+            ha["RSI"] = rsi(ha["HA_Close"], RSI_LEN)
+            ha["ATR"] = atr(df, ATR_LEN)
 
             last = ha.iloc[-1]
             prev = ha.iloc[-2]
@@ -132,14 +132,14 @@ def run_ha_scanner() -> pd.DataFrame:
             prev_candle = "BULL" if prev["HA_Close"] > prev["HA_Open"] else "BEAR"
             curr_candle = "BULL" if ha_bull else "BEAR"
 
-            daily_up   = last["HA_Close"] > last["EMA20"] > last["EMA50"]
+            daily_up = last["HA_Close"] > last["EMA20"] > last["EMA50"]
             daily_down = last["HA_Close"] < last["EMA20"] < last["EMA50"]
 
             vol_ma20 = df["Volume"].rolling(20).mean().iloc[-1]
             vol_ratio = df["Volume"].iloc[-1] / vol_ma20 if vol_ma20 > 0 else 0
             vol_confirm = vol_ratio > 1.2
 
-            body   = abs(last["HA_Close"] - last["HA_Open"])
+            body = abs(last["HA_Close"] - last["HA_Open"])
             range_ = last["HA_High"] - last["HA_Low"]
             is_doji = (body / range_) < 0.2 if range_ > 0 else True
 
@@ -167,7 +167,7 @@ def run_ha_scanner() -> pd.DataFrame:
             if is_doji:
                 verdict = "NO TRADE"
 
-            don_low  = ha["HA_Low"].rolling(DONCHIAN_LEN).min().shift(1).iloc[-1]
+            don_low = ha["HA_Low"].rolling(DONCHIAN_LEN).min().shift(1).iloc[-1]
             don_high = ha["HA_High"].rolling(DONCHIAN_LEN).max().shift(1).iloc[-1]
 
             price = df["Close"].iloc[-1]
@@ -272,17 +272,14 @@ def load_bhavcopies():
     cm_df = try_download_cm_udiff(session)
     return fo_df, cm_df
 
+# ===== near & next month helper (display-only for next) =====
 
-def get_near_month_future(fo_df, symbol):
+def get_near_and_next_future(fo_df, symbol):
     """
-    UDiFF mapping:
-    - STF: Futures Stock (FUTSTK)
-    - IDF: Index Futures (FUTIDX)
-    - TckrSymb: underlying symbol (e.g. RELIANCE, NIFTY)
-    - XpryDt: expiry date
+    Return near-month and next-month futures rows (if available).
+    For indices, FinInstrmTp='IDF'; for stocks, 'STF'.
     """
     sym = symbol.upper()
-
     inst_type = "IDF" if sym in INDEX_SYMBOLS else "STF"
 
     fut = fo_df[
@@ -291,19 +288,20 @@ def get_near_month_future(fo_df, symbol):
     ].copy()
 
     if fut.empty:
-        return None
+        return None, None
 
     fut["XpryDt"] = pd.to_datetime(fut["XpryDt"])
     fut = fut.sort_values("XpryDt")
 
-    return fut.iloc[0]
-
+    near = fut.iloc[0]
+    nextm = fut.iloc[1] if len(fut) > 1 else None
+    return near, nextm
 
 def futures_conviction(fut, spot_close):
     fut_close = fut["ClsPric"]
-    fut_open  = fut["OpnPric"]
+    fut_open = fut["OpnPric"]
     oi_change = fut["ChngInOpnIntrst"]
-    volume    = fut["TtlTradgVol"]
+    volume = fut["TtlTradgVol"]
 
     premium_pct = ((fut_close - spot_close) / spot_close) * 100
     price_change = fut_close - fut_open
@@ -335,24 +333,51 @@ def run_futures_conviction():
     fo_df, cm_df = load_bhavcopies()
 
     cm_symbol_col = "TckrSymb"
-    cm_close_col  = "ClsPric"
+    cm_close_col = "ClsPric"
     if cm_symbol_col not in cm_df.columns or cm_close_col not in cm_df.columns:
         raise RuntimeError(f"Unexpected CM columns: {cm_df.columns.tolist()}")
 
     results = []
     for symbol in TICKERS:
         try:
-            fut = get_near_month_future(fo_df, symbol)
-            if fut is None:
+            near, nextm = get_near_and_next_future(fo_df, symbol)
+            if near is None:
                 continue
+
             spot_row = cm_df[cm_df[cm_symbol_col] == symbol]
             if spot_row.empty:
                 continue
             spot_close = spot_row.iloc[0][cm_close_col]
-            conviction = futures_conviction(fut, spot_close)
-            conviction["Symbol"] = symbol
-            conviction["Expiry"] = fut["XpryDt"].date()
-            results.append(conviction)
+
+            # current month conviction (used in scoring)
+            near_conv = futures_conviction(near, spot_close)
+
+            row = {
+                "Symbol": symbol,
+                "Expiry": near["XpryDt"].date(),
+                "Spot Close": near_conv["Spot Close"],
+                "Fut Close": near_conv["Fut Close"],
+                "Premium %": near_conv["Premium %"],
+                "OI Change": near_conv["OI Change"],
+                "Volume (Contracts)": near_conv["Volume (Contracts)"],
+                "Buildup": near_conv["Buildup"],
+                "Bias": near_conv["Bias"]
+            }
+
+            # next month – display only, not used in Fut_Score
+            if nextm is not None:
+                next_conv = futures_conviction(nextm, spot_close)
+                row.update({
+                    "Next_Expiry": nextm["XpryDt"].date(),
+                    "Next_Fut Close": next_conv["Fut Close"],
+                    "Next_Premium %": next_conv["Premium %"],
+                    "Next_OI Change": next_conv["OI Change"],
+                    "Next_Volume (Contracts)": next_conv["Volume (Contracts)"],
+                    "Next_Buildup": next_conv["Buildup"],
+                    "Next_Bias": next_conv["Bias"]
+                })
+
+            results.append(row)
         except Exception as e:
             print(f"Skipped {symbol}: {e}")
 
@@ -360,16 +385,12 @@ def run_futures_conviction():
         return pd.DataFrame()
 
     df = pd.DataFrame(results)
-    df = df[
-        ["Symbol", "Expiry", "Spot Close", "Fut Close",
-         "Premium %", "OI Change", "Volume (Contracts)", "Buildup", "Bias"]
-    ]
     return df
 
 # ==========================
 # COMBINED CONVICTION SCORING
 # ==========================
-# logic converts the qualitative verdict + raw score into a single numeric score
+
 def score_scanner_row(verdict: str, score: int) -> int:
     if verdict == "STRONG BUY":
         base = 4
@@ -381,7 +402,6 @@ def score_scanner_row(verdict: str, score: int) -> int:
         base = -4
     else:
         base = 0
-    # Prevents raw score from overriding verdict:
     return base + max(-2, min(2, score))
 
 def score_futures_row(bias: str, buildup: str) -> float:
@@ -420,7 +440,6 @@ def label_total_conviction(total: float) -> str:
         return "HIGH BEARISH"
 
 def relabel_total_conviction(total: float, scan_score: float, fut_score: float) -> str:
-    # Direction by total
     if total > 0:
         direction = "Buy"
     elif total < 0:
@@ -428,7 +447,6 @@ def relabel_total_conviction(total: float, scan_score: float, fut_score: float) 
     else:
         direction = "Neutral"
 
-    # Strength by absolute total
     abs_total = abs(total)
     if abs_total >= 8:
         strength = "Strong"
@@ -439,7 +457,6 @@ def relabel_total_conviction(total: float, scan_score: float, fut_score: float) 
     else:
         strength = "Flat"
 
-    # Alignment between scanner and futures
     if scan_score == 0 and fut_score == 0:
         alignment = "No Signal"
     elif scan_score * fut_score > 0:
@@ -460,7 +477,7 @@ def relabel_total_conviction(total: float, scan_score: float, fut_score: float) 
 
 def run_scanner():
     scanner_df = run_ha_scanner()
-    fut_df     = run_futures_conviction()
+    fut_df = run_futures_conviction()
 
     if scanner_df.empty or fut_df.empty:
         return scanner_df, fut_df, pd.DataFrame()
@@ -469,7 +486,7 @@ def run_scanner():
         fut_df,
         left_on="Ticker",
         right_on="Symbol",
-        how="left"  # left join so NIFTY/BANKNIFTY stay even if no futures row
+        how="left"  # keep NIFTY/BANKNIFTY even if no futures row
     )
 
     merged["Scan_Score"] = merged.apply(
@@ -477,9 +494,8 @@ def run_scanner():
         axis=1
     )
 
-        # For rows without futures (e.g. NIFTY/BANKNIFTY), Fut_Score will be 0
     def safe_fut_score(row):
-        if pd.isna(row["Bias"]) or pd.isna(row["Buildup"]):
+        if pd.isna(row.get("Bias")) or pd.isna(row.get("Buildup")):
             return 0.0
         return score_futures_row(row["Bias"], row["Buildup"])
 
@@ -493,26 +509,20 @@ def run_scanner():
         ascending=[False, False, False]
     )
 
-    merged = merged.sort_values(
-        ["Final_Score", "Conf%", "Vol_Ratio"],
-        ascending=[False, False, False]
-    )
-
-    # Drop columns you don't want in the dashboard
     cols_to_drop = ["Price", "Donchian_SL", "SL_Distance", "ATR", "Symbol"]
     merged = merged.drop(columns=[c for c in cols_to_drop if c in merged.columns])
-    
-    # Rearrange columns
+
     cols_order = [
         "Ticker", "Final_Conviction", "Final_Score",
         "Prev HA", "Cur HA", "Trend", "Verdict", "Score", "Conf%", "RSI", "Vol_Ratio",
         "Expiry", "Spot Close", "Fut Close", "Premium %", "OI Change", "Volume (Contracts)",
         "Buildup", "Bias",
+        "Next_Expiry", "Next_Fut Close", "Next_Premium %", "Next_OI Change",
+        "Next_Volume (Contracts)", "Next_Buildup", "Next_Bias",
         "Scan_Score", "Fut_Score"
     ]
-    merged = merged[[c for c in cols_order if c in merged.columns]] 
+    merged = merged[[c for c in cols_order if c in merged.columns]]
 
-    # relabel final conviction
     merged["Final_Conviction"] = merged.apply(
         lambda row: relabel_total_conviction(row["Final_Score"], row["Scan_Score"], row["Fut_Score"]),
         axis=1
