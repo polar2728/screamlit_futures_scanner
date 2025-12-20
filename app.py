@@ -75,8 +75,19 @@ if report.empty:
 else:
     st.success(f"Scan complete – {len(report)} results found")
 
-    # st.dataframe(report, use_container_width=True, hide_index=True)
-    st.dataframe(report, width="stretch", hide_index=True)
+    # assume df is your merged dashboard DataFrame
+    pinned_cols = ["Ticker", "Final_Conviction", "Final_Score"]
+
+    st.dataframe(
+        report,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            col: st.column_config.Column(pinned=True)
+            for col in pinned_cols
+            if col in report.columns
+        }
+    )
 
     # Metrics
     col1, col2, col3, col4 = st.columns(4)
@@ -100,19 +111,7 @@ else:
         mime="text/csv"
     )
 
-    # assume df is your merged dashboard DataFrame
-    pinned_cols = ["Ticker", "Final_Conviction", "Final_Score"]
 
-    st.dataframe(
-        report,
-        width="stretch",
-        hide_index=True,
-        column_config={
-            col: st.column_config.Column(pinned=True)
-            for col in pinned_cols
-            if col in report.columns
-        }
-    )
 
 # Auto-refresh (experimental)
 if auto_refresh:
