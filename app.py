@@ -55,12 +55,15 @@ with st.sidebar:
 st.title("📊 Heikin Ashi Daily Futures Scanner")
 st.caption("End-of-Day | Risk-Aware | 23 Liquid Symbols | **4-Signal Core + Filters**")
 
-@st.cache_data(ttl=3600, show_spinner=False)  # Cache 1 hour
+# FIXED: Cache-busting + Safe column selection
+@st.cache_data(ttl=3600, show_spinner=False)
 def cached_scanner():
     return run_scanner()
 
-# Run scanner
+# Force cache clear on button press
 if st.button("🔄 Run Scanner Now", type="primary") or ("last_run" not in st.session_state):
+    # Clear cache explicitly
+    cached_scanner.clear()
     with st.spinner("Running scanner..."):
         report = cached_scanner()
     st.session_state.last_run = datetime.now().strftime("%Y-%m-%d %H:%M")
