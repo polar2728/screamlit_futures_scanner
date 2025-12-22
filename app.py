@@ -117,7 +117,7 @@ else:
         st.dataframe(
             strong_df[["Ticker", "Final_Score", "Breakout", "HA", "Fut_Bias", "Vol_Ratio", 
                       "Breakout_Conf", "Compression", "ADX_Trend"]],
-            use_container_width=True,
+            width="stretch",
             height=200
         )
     else:
