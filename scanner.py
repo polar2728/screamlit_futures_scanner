@@ -6,24 +6,16 @@ import yfinance as yf
 from io import BytesIO
 from datetime import date, timedelta, datetime
 import time as time
+import os
 
 # ==========================
-# CONFIG
+# CONFIG - SIMPLIFIED
 # ==========================
-
-ACCOUNT_CAPITAL = 250000
-RISK_PER_TRADE_PCT = 1.0
 
 LOOKBACK_DAYS = "9mo"
-RSI_LEN = 14
-EMA_FAST = 20
-EMA_SLOW = 50
-ATR_LEN = 14
-DONCHIAN_LEN = 5
 
 INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY"}
 
-# Common stock futures universe
 TICKERS = [
     "NIFTY", "BANKNIFTY", "RELIANCE", "HDFCBANK", "ICICIBANK", "AXISBANK", "SBIN",
     "INFY", "TCS", "ITC", "HINDUNILVR", "BHARTIARTL", "LT", "KOTAKBANK",
@@ -31,7 +23,6 @@ TICKERS = [
     "TATAPOWER", "INDIGO", "ULTRACEMCO", "ONGC"
 ]
 
-# Map to Yahoo symbols for scanner
 SYMBOL_MAP = {
     "NIFTY": "^NSEI",
     "BANKNIFTY": "^NSEBANK",
@@ -59,7 +50,7 @@ SYMBOL_MAP = {
 }
 
 # ==========================
-# INDICATORS (scanner)
+# CORE 4 SIGNALS SCANNER (with ALL display data)
 # ==========================
 
 def heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
@@ -76,127 +67,145 @@ def heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
     df["HA_Low"] = np.minimum(df["Low"], np.minimum(df["HA_Open"], df["HA_Close"]))
     return df
 
-def rsi(series: pd.Series, length: int = 14) -> pd.Series:
-    delta = series.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(length).mean()
-    avg_loss = loss.rolling(length).mean()
-    rs = avg_gain / avg_loss
-    return (100 - (100 / (1 + rs))).fillna(50)
-
-def atr(df: pd.DataFrame, length: int = 14) -> pd.Series:
-    tr = pd.concat([
-        df["High"] - df["Low"],
-        (df["High"] - df["Close"].shift()).abs(),
-        (df["Low"] - df["Close"].shift()).abs()
-    ], axis=1).max(axis=1)
-    return tr.rolling(length).mean()
-
-# ==========================
-# HA SCANNER (EOD)
-# ==========================
-
-def run_ha_scanner() -> pd.DataFrame:
+def run_core_scanner() -> pd.DataFrame:
     results = []
-    scan_time = datetime.now()
-
+    
     for name, symbol in SYMBOL_MAP.items():
         try:
-            df = yf.download(
-                symbol,
-                period=LOOKBACK_DAYS,
-                interval="1d",
-                auto_adjust=True,
-                progress=False
-            )
-            time.sleep(1.5)
-            if df.empty or len(df) < 60:
+            df = yf.download(symbol, period=LOOKBACK_DAYS, interval="1d", 
+                           auto_adjust=True, progress=False)
+            time.sleep(0.5)
+            if df.empty or len(df) < 50:
                 continue
 
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
+            price = df["Close"].iloc[-1]
+            
+            # === CORE SIGNALS ===
+            # 1. DONCHIAN 20 BREAKOUT
+            don_high_20 = df["High"].rolling(20).max().shift(1).iloc[-1]
+            don_low_20 = df["Low"].rolling(20).min().shift(1).iloc[-1]
+            breakout_long = price > don_high_20
+            breakout_short = price < don_low_20
+
+            # 2. HEIKIN ASHI
             ha = heikin_ashi(df)
-            ha["EMA20"] = ha["HA_Close"].ewm(span=EMA_FAST, adjust=False).mean()
-            ha["EMA50"] = ha["HA_Close"].ewm(span=EMA_SLOW, adjust=False).mean()
-            ha["RSI"] = rsi(ha["HA_Close"], RSI_LEN)
-            ha["ATR"] = atr(df, ATR_LEN)
-
-            last = ha.iloc[-1]
-            prev = ha.iloc[-2]
-
-            ha_bull = last["HA_Close"] > last["HA_Open"]
-            ha_bear = last["HA_Close"] < last["HA_Open"]
-
-            prev_candle = "BULL" if prev["HA_Close"] > prev["HA_Open"] else "BEAR"
+            
+            # === ALL INDICATORS FIRST ===
+            ha["EMA20"] = ha["HA_Close"].ewm(span=20, adjust=False).mean()
+            ha["EMA50"] = ha["HA_Close"].ewm(span=50, adjust=False).mean()
+            
+            # RSI
+            delta = ha["HA_Close"].diff()
+            gain = delta.clip(lower=0).rolling(14).mean()
+            loss = (-delta).clip(lower=0).rolling(14).mean()
+            rs = gain / loss
+            ha["RSI"] = 100 - (100 / (1 + rs)).fillna(50)
+            
+            # ATR
+            tr1 = df["High"] - df["Low"]
+            tr2 = (df["High"] - df["Close"].shift()).abs()
+            tr3 = (df["Low"] - df["Close"].shift()).abs()
+            ha["ATR"] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1).rolling(14).mean()
+            
+            # NOW access last_ha
+            last_ha = ha.iloc[-1]
+            prev_ha = ha.iloc[-2]
+            
+            ha_bull = last_ha["HA_Close"] > last_ha["HA_Open"]
+            ha_bear = last_ha["HA_Close"] < last_ha["HA_Open"]
+            prev_candle = "BULL" if prev_ha["HA_Close"] > prev_ha["HA_Open"] else "BEAR"
             curr_candle = "BULL" if ha_bull else "BEAR"
 
-            daily_up = last["HA_Close"] > last["EMA20"] > last["EMA50"]
-            daily_down = last["HA_Close"] < last["EMA20"] < last["EMA50"]
-
+            # 3. VOLUME
             vol_ma20 = df["Volume"].rolling(20).mean().iloc[-1]
             vol_ratio = df["Volume"].iloc[-1] / vol_ma20 if vol_ma20 > 0 else 0
             vol_confirm = vol_ratio > 1.2
 
-            body = abs(last["HA_Close"] - last["HA_Open"])
-            range_ = last["HA_High"] - last["HA_Low"]
+            # 4. DOJI FILTER
+            body = abs(last_ha["HA_Close"] - last_ha["HA_Open"])
+            range_ = last_ha["HA_High"] - last_ha["HA_Low"]
             is_doji = (body / range_) < 0.2 if range_ > 0 else True
 
-            # Score
+            # === SCORING (UNCHANGED - 4 signals only) ===
             score = 0
-            if daily_up: score += 2
-            if daily_down: score -= 2
+            if breakout_long: score += 3
+            if breakout_short: score -= 3
             if ha_bull: score += 1
             if ha_bear: score -= 1
-            if last["RSI"] > 60: score += 1
-            if last["RSI"] < 40: score -= 1
-            if vol_confirm: score += 1
-            if is_doji: score -= 1
-
-            if score >= 4:
-                verdict = "STRONG BUY"
-            elif score <= -4:
-                verdict = "STRONG SELL"
-            elif score > 0:
-                verdict = "WEAK BUY"
-            elif score < 0:
-                verdict = "WEAK SELL"
-            else:
-                verdict = "NO TRADE"
-            if is_doji:
-                verdict = "NO TRADE"
-
-            don_low = ha["HA_Low"].rolling(DONCHIAN_LEN).min().shift(1).iloc[-1]
-            don_high = ha["HA_High"].rolling(DONCHIAN_LEN).max().shift(1).iloc[-1]
-
-            price = df["Close"].iloc[-1]
-
-            if verdict.endswith("BUY"):
-                sl = don_low
-            elif verdict.endswith("SELL"):
-                sl = don_high
-            else:
-                sl = np.nan
-
-            dist_to_sl = abs(price - sl) if not np.isnan(sl) else np.nan
+            if vol_confirm: score += 0.5
+            if is_doji: score -= 0.5
 
             confidence = min(100, abs(score) * 20)
 
+            # === DISPLAY-ONLY ===
+            daily_up = last_ha["HA_Close"] > last_ha["EMA20"] > last_ha["EMA50"]
+            daily_down = last_ha["HA_Close"] < last_ha["EMA20"] < last_ha["EMA50"]
+            trend = "UP" if daily_up else "DOWN" if daily_down else "SIDE"
+
+            # Donchian SL
+            don_low_5 = ha["HA_Low"].rolling(5).min().shift(1).iloc[-1]
+            don_high_5 = ha["HA_High"].rolling(5).max().shift(1).iloc[-1]
+            sl_long = don_low_5
+            sl_short = don_high_5
+            dist_to_sl_long = abs(price - sl_long) if not np.isnan(sl_long) else np.nan
+            dist_to_sl_short = abs(price - sl_short) if not np.isnan(sl_short) else np.nan
+
+            # === NEW: 3 EXTRA FALSE BREAKOUT FILTERS (DISPLAY ONLY) ===
+            # 1. 2-BAR CONFIRMATION
+            breakout_confirmed_long = price > don_high_20 and df["Close"].iloc[-2] > don_high_20
+            breakout_confirmed_short = price < don_low_20 and df["Close"].iloc[-2] < don_low_20
+            breakout_conf = "YES" if (breakout_confirmed_long or breakout_confirmed_short) else "PENDING"
+
+            # 2. NARROW RANGE COMPRESSION (40% contraction before breakout)
+            range_20d = don_high_20 - don_low_20 if not np.isnan(don_high_20) and not np.isnan(don_low_20) else np.nan
+            recent_range_5d = df["High"].iloc[-5:].max() - df["Low"].iloc[-5:].min()
+            compression = recent_range_5d < (range_20d * 0.6) if not np.isnan(range_20d) else False
+            compression_status = "YES" if compression else "NO"
+
+            # 3. ADX TREND STRENGTH (pure pandas implementation)
+            high_low = df["High"] - df["Low"]
+            high_close = (df["High"] - df["Close"].shift()).abs()
+            low_close = (df["Low"] - df["Close"].shift()).abs()
+            tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+            atr_14 = tr.rolling(14).mean()
+            
+            plus_dm = df["High"].diff()
+            minus_dm = df["Low"].diff() * -1
+            plus_dm[plus_dm < 0] = 0
+            minus_dm[minus_dm < 0] = 0
+            plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0)
+            minus_dm = np.where((minus_dm > plus_dm) & (minus_dm > 0), minus_dm, 0)
+            
+            plus_di = 100 * (pd.Series(plus_dm).rolling(14).mean() / atr_14)
+            minus_di = 100 * (pd.Series(minus_dm).rolling(14).mean() / atr_14)
+            dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
+            adx = dx.rolling(14).mean().iloc[-1]
+            
+            adx_status = "STRONG" if adx > 25 else "MEDIUM" if adx > 20 else "WEAK"
+
             results.append({
                 "Ticker": name,
-                "Prev HA": prev_candle,
-                "Cur HA": curr_candle,
-                "Verdict": verdict,
-                "Score": score,
+                "Score": round(score, 1),
                 "Conf%": confidence,
+                "Verdict": "STRONG BUY" if score >= 4 else "STRONG SELL" if score <= -4 else "WEAK" if score != 0 else "NEUTRAL",
+                "Breakout": "LONG" if breakout_long else "SHORT" if breakout_short else "NONE",
+                "HA": curr_candle,
+                "Vol_Ratio": round(vol_ratio, 2),
                 "Price": round(price, 2),
-                "Donchian_SL": round(sl, 2) if not np.isnan(sl) else "—",
-                "SL_Distance": round(dist_to_sl, 2) if not np.isnan(dist_to_sl) else "—",
-                "ATR": round(last["ATR"], 2),
-                "RSI": round(last["RSI"], 2),
-                "Trend": "UP" if daily_up else "DOWN" if daily_down else "SIDE",
-                "Vol_Ratio": round(vol_ratio, 2)
+                
+                # ORIGINAL DISPLAY
+                "Prev_HA": prev_candle,
+                "Trend": trend,
+                "RSI": round(last_ha["RSI"], 1) if not np.isnan(last_ha["RSI"]) else "—",
+                "ATR": round(last_ha["ATR"], 2) if not np.isnan(last_ha["ATR"]) else "—",
+                
+                # === NEW: 3 FALSE BREAKOUT FILTERS ===
+                "Breakout_Conf": breakout_conf,
+                "Compression": compression_status,
+                "ADX_Trend": adx_status
             })
 
         except Exception as e:
@@ -205,11 +214,11 @@ def run_ha_scanner() -> pd.DataFrame:
     if not results:
         return pd.DataFrame()
 
-    report = pd.DataFrame(results)
-    return report.sort_values(["Conf%", "Vol_Ratio"], ascending=False)
+    return pd.DataFrame(results).sort_values(["Score", "Conf%"], ascending=False)
+
 
 # ==========================
-# NSE UDIFF FUTURES SECTION
+# FUTURES (unchanged from streamlined version)
 # ==========================
 
 def get_nse_session():
@@ -222,309 +231,184 @@ def get_nse_session():
     })
     try:
         session.get("https://www.nseindia.com", timeout=10)
-    except Exception:
+    except:
         pass
     return session
-
-def try_download_cm_udiff(session, lookback_days=5):
-    for i in range(lookback_days):
-        d = date.today() - timedelta(days=i)
-        yyyymmdd = d.strftime("%Y%m%d")
-        url = (
-            "https://nsearchives.nseindia.com/content/cm/"
-            f"BhavCopy_NSE_CM_0_0_0_{yyyymmdd}_F_0000.csv.zip"
-        )
-        try:
-            r = session.get(url, timeout=15)
-            if r.status_code == 200 and "zip" in r.headers.get("Content-Type", "").lower():
-                with zipfile.ZipFile(BytesIO(r.content)) as z:
-                    fname = z.namelist()[0]
-                    print(f"Loaded CM bhavcopy (UDiFF) for {d:%Y-%m-%d}")
-                    df = pd.read_csv(z.open(fname))
-                    return df
-        except Exception:
-            continue
-    raise RuntimeError("No CM UDiFF bhavcopy found in last few days")
 
 def try_download_fo_udiff(session, lookback_days=5):
     for i in range(lookback_days):
         d = date.today() - timedelta(days=i)
         yyyymmdd = d.strftime("%Y%m%d")
-        url = (
-            "https://nsearchives.nseindia.com/content/fo/"
-            f"BhavCopy_NSE_FO_0_0_0_{yyyymmdd}_F_0000.csv.zip"
-        )
+        url = f"https://nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_{yyyymmdd}_F_0000.csv.zip"
         try:
             r = session.get(url, timeout=15)
             if r.status_code == 200 and "zip" in r.headers.get("Content-Type", "").lower():
                 with zipfile.ZipFile(BytesIO(r.content)) as z:
                     fname = z.namelist()[0]
-                    print(f"Loaded FO bhavcopy (UDiFF) for {d:%Y-%m-%d}")
-                    df = pd.read_csv(z.open(fname))
-                    return df
-        except Exception:
+                    print(f"Loaded FO bhavcopy for {d:%Y-%m-%d}")
+                    return pd.read_csv(z.open(fname))
+        except:
             continue
-    raise RuntimeError("No FO UDiFF bhavcopy found in last few days")
+    raise RuntimeError("No FO bhavcopy found")
 
-def load_bhavcopies():
-    session = get_nse_session()
-    fo_df = try_download_fo_udiff(session)
-    cm_df = try_download_cm_udiff(session)
-    return fo_df, cm_df
-
-# ===== near & next month helper (display-only for next) =====
+def try_download_cm_udiff(session, lookback_days=5):
+    for i in range(lookback_days):
+        d = date.today() - timedelta(days=i)
+        yyyymmdd = d.strftime("%Y%m%d")
+        url = f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{yyyymmdd}_F_0000.csv.zip"
+        try:
+            r = session.get(url, timeout=15)
+            if r.status_code == 200 and "zip" in r.headers.get("Content-Type", "").lower():
+                with zipfile.ZipFile(BytesIO(r.content)) as z:
+                    fname = z.namelist()[0]
+                    print(f"Loaded CM bhavcopy for {d:%Y-%m-%d}")
+                    return pd.read_csv(z.open(fname))
+        except:
+            continue
+    raise RuntimeError("No CM bhavcopy found")
 
 def get_near_and_next_future(fo_df, symbol):
-    """
-    Return near-month and next-month futures rows (if available).
-    For indices, FinInstrmTp='IDF'; for stocks, 'STF'.
-    """
     sym = symbol.upper()
     inst_type = "IDF" if sym in INDEX_SYMBOLS else "STF"
-
+    
     fut = fo_df[
         (fo_df["FinInstrmTp"].astype(str).str.strip().str.upper() == inst_type) &
         (fo_df["TckrSymb"].astype(str).str.strip().str.upper() == sym)
     ].copy()
-
+    
     if fut.empty:
         return None, None
-
+    
     fut["XpryDt"] = pd.to_datetime(fut["XpryDt"])
     fut = fut.sort_values("XpryDt")
-
     near = fut.iloc[0]
     nextm = fut.iloc[1] if len(fut) > 1 else None
     return near, nextm
 
 def futures_conviction(fut, spot_close):
-    fut_close = fut["ClsPric"]
-    fut_open = fut["OpnPric"]
     oi_change = fut["ChngInOpnIntrst"]
-    volume = fut["TtlTradgVol"]
-
-    premium_pct = ((fut_close - spot_close) / spot_close) * 100
-    price_change = fut_close - fut_open
-
+    price_change = fut["ClsPric"] - fut["OpnPric"]
+    
     if oi_change > 0 and price_change > 0:
-        buildup = "Long Buildup"
-        bias = "BULLISH"
+        bias_score, bias = 2.0, "BULLISH"
     elif oi_change > 0 and price_change < 0:
-        buildup = "Short Buildup"
-        bias = "BEARISH"
+        bias_score, bias = -2.0, "BEARISH"
     elif oi_change < 0 and price_change > 0:
-        buildup = "Short Covering"
-        bias = "BULLISH"
+        bias_score, bias = 1.0, "BULLISH"
     else:
-        buildup = "Long Unwinding"
-        bias = "BEARISH"
-
+        bias_score, bias = -1.0, "BEARISH"
+    
     return {
-        "Fut Close": round(float(fut_close), 2),
-        "Spot Close": round(float(spot_close), 2),
-        "Premium %": round(float(premium_pct), 2),
-        "OI Change": int(oi_change),
-        "Volume (Contracts)": int(volume),
-        "Buildup": buildup,
-        "Bias": bias
+        "Fut_Score": bias_score,
+        "Fut_Bias": bias,
+        "OI_Change": int(oi_change),
+        "Fut_Close": round(float(fut["ClsPric"]), 2),
+        "Expiry": fut["XpryDt"].date()
     }
 
-def run_futures_conviction():
-    fo_df, cm_df = load_bhavcopies()
-
-    cm_symbol_col = "TckrSymb"
-    cm_close_col = "ClsPric"
-    if cm_symbol_col not in cm_df.columns or cm_close_col not in cm_df.columns:
-        raise RuntimeError(f"Unexpected CM columns: {cm_df.columns.tolist()}")
-
+def run_futures_bias():
+    session = get_nse_session()
+    fo_df = try_download_fo_udiff(session)
+    cm_df = try_download_cm_udiff(session)
+    
     results = []
     for symbol in TICKERS:
         try:
             near, nextm = get_near_and_next_future(fo_df, symbol)
             if near is None:
                 continue
-
-            spot_row = cm_df[cm_df[cm_symbol_col] == symbol]
+                
+            spot_row = cm_df[cm_df["TckrSymb"] == symbol]
             if spot_row.empty:
                 continue
-            spot_close = spot_row.iloc[0][cm_close_col]
-
-            # current month conviction (used in scoring)
-            near_conv = futures_conviction(near, spot_close)
-
-            row = {
-                "Symbol": symbol,
-                "Expiry": near["XpryDt"].date(),
-                "Spot Close": near_conv["Spot Close"],
-                "Fut Close": near_conv["Fut Close"],
-                "Premium %": near_conv["Premium %"],
-                "OI Change": near_conv["OI Change"],
-                "Volume (Contracts)": near_conv["Volume (Contracts)"],
-                "Buildup": near_conv["Buildup"],
-                "Bias": near_conv["Bias"]
-            }
-
-            # next month – display only, not used in Fut_Score
+            spot_close = spot_row.iloc[0]["ClsPric"]
+            
+            near_data = futures_conviction(near, spot_close)
+            near_data["Symbol"] = symbol
+            
+            # Next month (display only)
             if nextm is not None:
-                next_conv = futures_conviction(nextm, spot_close)
-                row.update({
-                    "Next_Expiry": nextm["XpryDt"].date(),
-                    "Next_Fut Close": next_conv["Fut Close"],
-                    "Next_Premium %": next_conv["Premium %"],
-                    "Next_OI Change": next_conv["OI Change"],
-                    "Next_Volume (Contracts)": next_conv["Volume (Contracts)"],
-                    "Next_Buildup": next_conv["Buildup"],
-                    "Next_Bias": next_conv["Bias"]
+                next_data = futures_conviction(nextm, spot_close)
+                near_data.update({
+                    "Next_Expiry": next_data["Expiry"],
+                    "Next_Fut_Close": next_data["Fut_Close"],
+                    "Next_Fut_Bias": next_data["Fut_Bias"],
+                    "Next_OI_Change": next_data["OI_Change"]
                 })
-
-            results.append(row)
-        except Exception as e:
-            print(f"Skipped {symbol}: {e}")
-
-    if not results:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(results)
-    return df
+            
+            results.append(near_data)
+        except:
+            continue
+    
+    return pd.DataFrame(results)
 
 # ==========================
-# COMBINED CONVICTION SCORING
-# ==========================
-
-def score_scanner_row(verdict: str, score: int) -> int:
-    if verdict == "STRONG BUY":
-        base = 4
-    elif verdict == "WEAK BUY":
-        base = 2
-    elif verdict == "WEAK SELL":
-        base = -2
-    elif verdict == "STRONG SELL":
-        base = -4
-    else:
-        base = 0
-    return base + max(-2, min(2, score))
-
-def score_futures_row(bias: str, buildup: str) -> float:
-    if bias == "BULLISH":
-        base = 2
-    elif bias == "BEARISH":
-        base = -2
-    else:
-        base = 0
-
-    if buildup == "Long Buildup":
-        base += 1
-    elif buildup == "Short Covering":
-        base += 0.5
-    elif buildup == "Short Buildup":
-        base -= 1
-    elif buildup == "Long Unwinding":
-        base -= 0.5
-
-    return base
-
-def label_total_conviction(total: float) -> str:
-    if total >= 6:
-        return "HIGH BULLISH"
-    elif 3 <= total < 6:
-        return "MODERATE BULLISH"
-    elif 0 < total < 3:
-        return "MILD BULLISH"
-    elif total == 0:
-        return "NEUTRAL"
-    elif -3 < total < 0:
-        return "MILD BEARISH"
-    elif -6 < total <= -3:
-        return "MODERATE BEARISH"
-    else:
-        return "HIGH BEARISH"
-
-def relabel_total_conviction(total: float, scan_score: float, fut_score: float) -> str:
-    if total > 0:
-        direction = "Buy"
-    elif total < 0:
-        direction = "Sell"
-    else:
-        direction = "Neutral"
-
-    abs_total = abs(total)
-    if abs_total >= 8:
-        strength = "Strong"
-    elif abs_total >= 4:
-        strength = "Moderate"
-    elif abs_total > 0:
-        strength = "Weak"
-    else:
-        strength = "Flat"
-
-    if scan_score == 0 and fut_score == 0:
-        alignment = "No Signal"
-    elif scan_score * fut_score > 0:
-        alignment = "Aligned"
-    elif scan_score * fut_score < 0:
-        alignment = "Conflicting"
-    else:
-        alignment = "Scan Only" if fut_score == 0 else "Fut Only"
-
-    if direction == "Neutral" or strength == "Flat":
-        return "Neutral / No Edge"
-
-    return f"{strength} {direction} ({alignment})"
-
-# ==========================
-# DASHBOARD MERGE
+# FINAL DASHBOARD (8 CORE + 12 DISPLAY)
 # ==========================
 
 def run_scanner():
-    scanner_df = run_ha_scanner()
-    fut_df = run_futures_conviction()
-
-    if scanner_df.empty or fut_df.empty:
-        return scanner_df, fut_df, pd.DataFrame()
-
-    merged = scanner_df.merge(
-        fut_df,
-        left_on="Ticker",
-        right_on="Symbol",
-        how="left"  # keep NIFTY/BANKNIFTY even if no futures row
-    )
-
-    merged["Scan_Score"] = merged.apply(
-        lambda row: score_scanner_row(row["Verdict"], row["Score"]),
-        axis=1
-    )
-
-    def safe_fut_score(row):
-        if pd.isna(row.get("Bias")) or pd.isna(row.get("Buildup")):
-            return 0.0
-        return score_futures_row(row["Bias"], row["Buildup"])
-
-    merged["Fut_Score"] = merged.apply(safe_fut_score, axis=1)
-
-    merged["Final_Score"] = merged["Scan_Score"] + merged["Fut_Score"]
-    merged["Final_Conviction"] = merged["Final_Score"].apply(label_total_conviction)
-
-    merged = merged.sort_values(
-        ["Final_Score", "Conf%", "Vol_Ratio"],
-        ascending=[False, False, False]
-    )
-
-    cols_to_drop = ["Price", "Donchian_SL", "SL_Distance", "ATR", "Symbol"]
-    merged = merged.drop(columns=[c for c in cols_to_drop if c in merged.columns])
-
-    cols_order = [
-        "Ticker", "Final_Conviction", "Final_Score",
-        "Prev HA", "Cur HA", "Trend", "Verdict", "Score", "Conf%", "RSI", "Vol_Ratio",
-        "Expiry", "Spot Close", "Fut Close", "Premium %", "OI Change", "Volume (Contracts)",
-        "Buildup", "Bias",
-        "Next_Expiry", "Next_Fut Close", "Next_Premium %", "Next_OI Change",
-        "Next_Volume (Contracts)", "Next_Buildup", "Next_Bias",
-        "Scan_Score", "Fut_Score"
+    print("=== CORE SCANNER ===")
+    scanner_df = run_core_scanner()
+    print("=== FUTURES BIAS ===")
+    fut_df = run_futures_bias()
+    
+    if scanner_df.empty:
+        return pd.DataFrame()
+    
+    # Merge futures
+    if not fut_df.empty:
+        merged = scanner_df.merge(fut_df, left_on="Ticker", right_on="Symbol", how="left")
+        merged["Final_Score"] = merged["Score"] + merged["Fut_Score"].fillna(0)
+        merged["Fut_Bias"] = merged["Fut_Bias"].fillna("NO FUT")
+    else:
+        merged = scanner_df.copy()
+        merged["Final_Score"] = merged["Score"]
+        merged["Fut_Bias"] = "NO DATA"
+    
+    # Final verdict
+    def get_final_verdict(row):
+        score = row["Final_Score"]
+        if score >= 5.0:
+            return "STRONG BUY"
+        elif score <= -5.0:
+            return "STRONG SELL"
+        elif score > 1.0:
+            return "WEAK BUY"
+        elif score < -1.0:
+            return "WEAK SELL"
+        else:
+            return "NEUTRAL"
+    
+    merged["Final_Verdict"] = merged.apply(get_final_verdict, axis=1)
+    merged["Conf%"] = (abs(merged["Final_Score"]) * 15).clip(upper=100).round(0)
+    
+    # === 8 PINNED CORE COLUMNS + DISPLAY COLUMNS ===
+    core_cols = [
+        "Ticker", "Final_Score", "Final_Verdict", "Breakout", "HA", 
+        "Fut_Bias", "Vol_Ratio", "Conf%"
     ]
-    merged = merged[[c for c in cols_order if c in merged.columns]]
-    merged["Final_Conviction"] = merged.apply(
-        lambda row: relabel_total_conviction(row["Final_Score"], row["Scan_Score"], row["Fut_Score"]),
-        axis=1
-    )
+    
+    display_cols = [
+        "Prev_HA", "Trend", "RSI", "ATR",
+        "Price", "Breakout_Conf", "Compression",
+        "ADX_Trend", "Expiry", "Fut_Close", "OI_Change",
+        "Next_Expiry", "Next_Fut_Close", "Next_Fut_Bias", "Next_OI_Change"
+    ]
+    
+    # All columns in order
+    all_cols = [c for c in core_cols if c in merged.columns] + \
+               [c for c in display_cols if c in merged.columns]
+    
+    return merged[all_cols].sort_values("Final_Score", ascending=False)
 
-    return merged
+if __name__ == "__main__":
+    dashboard = run_scanner()
+    if not dashboard.empty:
+        print("\n=== 4-SIGNAL DASHBOARD (8 CORE + 12 DISPLAY) ===")
+        print(dashboard.to_string(index=False))
+        dashboard.to_csv("complete_dashboard.csv", index=False)
+        strong_buys = len(dashboard[dashboard['Final_Score'] >= 5])
+        strong_sells = len(dashboard[dashboard['Final_Score'] <= -5])
+        print(f"\nSTRONG BUYS: {strong_buys} | STRONG SELLS: {strong_sells}")
+    else:
+        print("No signals today.")

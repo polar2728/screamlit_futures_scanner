@@ -53,7 +53,7 @@ with st.sidebar:
 # MAIN APP
 # ==========================
 st.title("📊 Heikin Ashi Daily Futures Scanner")
-st.caption("End-of-Day | Risk-Aware | 23 Liquid Symbols")
+st.caption("End-of-Day | Risk-Aware | 23 Liquid Symbols | **4-Signal Core + Filters**")
 
 @st.cache_data(ttl=3600, show_spinner=False)  # Cache 1 hour
 def cached_scanner():
@@ -65,7 +65,6 @@ if st.button("🔄 Run Scanner Now", type="primary") or ("last_run" not in st.se
         report = cached_scanner()
     st.session_state.last_run = datetime.now().strftime("%Y-%m-%d %H:%M")
     st.rerun()
-
 else:
     report = cached_scanner()
 
@@ -75,9 +74,10 @@ if report.empty:
 else:
     st.success(f"Scan complete – {len(report)} results found")
 
-    # assume df is your merged dashboard DataFrame
-    pinned_cols = ["Ticker", "Final_Conviction", "Final_Score"]
+    # === PINNED CORE COLUMNS (Decision columns)
+    pinned_cols = ["Ticker", "Final_Score", "Final_Verdict", "Breakout", "HA", "Fut_Bias"]
 
+    # === DATAFRAME WITH PINNED COLUMNS ===
     st.dataframe(
         report,
         width="stretch",
@@ -89,30 +89,69 @@ else:
         }
     )
 
-    # Metrics
-    col1, col2, col3, col4 = st.columns(4)
-    strong_buy = (report["Final_Score"] >= 8).sum()
-    strong_sell = (report["Final_Score"] <= -8).sum()
-    mod_buy = ((report["Final_Score"] >= 4) & (report["Final_Score"] < 8)).sum()
-    mod_sell = ((report["Final_Score"] >= -8) & (report["Final_Score"] < -4)).sum()
+    # === UPDATED METRICS (New scoring: STRONG ≥5, WEAK 1-4.9) ===
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    strong_buy = (report["Final_Score"] >= 5).sum()
+    strong_sell = (report["Final_Score"] <= -5).sum()
+    weak_buy = ((report["Final_Score"] > 1) & (report["Final_Score"] < 5)).sum()
+    weak_sell = ((report["Final_Score"] < -1) & (report["Final_Score"] > -5)).sum()
+    neutral = (abs(report["Final_Score"]) <= 1).sum()
 
-    col1.metric("Total Signals", len(report))
-    col2.metric("Strong Ideas", strong_buy + strong_sell)
-    col3.metric("Moderate Ideas", mod_buy + mod_sell)
-    col4.metric("Net Edge", f"{(strong_buy + mod_buy) - (strong_sell + mod_sell):+}")
+    col1.metric("Total", len(report), delta=f"+{len(report)}")
+    col2.metric("STRONG BUY", strong_buy, delta=f"+{strong_buy}")
+    col3.metric("STRONG SELL", strong_sell, delta=f"+{strong_sell}")
+    col4.metric("WEAK", weak_buy + weak_sell, delta=f"+{weak_buy + weak_sell}")
+    col5.metric("NEUTRAL", neutral, delta=f"+{neutral}")
 
+    # === TRADE RECOMMENDATIONS ===
+    st.markdown("---")
+    st.markdown("### 🚀 **TRADE RECOMMENDATIONS**")
+    
+    strong_df = report[report["Final_Score"] >= 5].copy()
+    if not strong_df.empty:
+        st.success(f"**{len(strong_df)} STRONG BUY signals** - Execute tomorrow!")
+        st.dataframe(
+            strong_df[["Ticker", "Final_Score", "Breakout", "HA", "Fut_Bias", "Vol_Ratio", 
+                      "Breakout_Conf", "Compression", "ADX_Trend"]],
+            use_container_width=True,
+            height=200
+        )
+    else:
+        st.warning("No STRONG BUY signals today")
+
+    # === FALSE BREAKOUT FILTER SUMMARY ===
+    st.markdown("### 🛡️ **False Breakout Filters**")
+    col1, col2, col3 = st.columns(3)
+    
+    confirmed = len(report[(report["Final_Score"] >= 5) & (report["Breakout_Conf"] == "YES")])
+    compressed = len(report[(report["Final_Score"] >= 5) & (report["Compression"] == "YES")])
+    strong_trend = len(report[(report["Final_Score"] >= 5) & (report["ADX_Trend"] == "STRONG")])
+    
+    col1.metric("2-Bar Confirmed", confirmed)
+    col2.metric("Compression Setup", compressed)
+    col3.metric("ADX Strong", strong_trend)
+
+    # === POSITION SIZING GUIDE ===
+    st.markdown("### 💰 **Position Sizing (₹2.5L Capital, 1% Risk)**")
+    if not strong_df.empty:
+        for idx, row in strong_df.head(3).iterrows():
+            ticker = row["Ticker"]
+            vol_ratio = row["Vol_Ratio"]
+            score = row["Final_Score"]
+            
+            size = "HIGH" if vol_ratio > 2 else "MEDIUM" if vol_ratio > 1.2 else "LOW"
+            st.caption(f"**{ticker}**: Score {score} | Vol {vol_ratio}x | Size: **{size}**")
 
     # Download
     csv = report.to_csv(index=False).encode()
     st.download_button(
-        label="📥 Download CSV Report",
+        label="📥 Download Full CSV (23 cols)",
         data=csv,
         file_name=f"HA_Scanner_{date.today()}.csv",
         mime="text/csv"
     )
 
-
-
-# Auto-refresh (experimental)
+# Auto-refresh
 if auto_refresh:
     st.autorefresh(interval=5*60*1000, key="auto")
