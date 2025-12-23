@@ -53,7 +53,7 @@ with st.sidebar:
 # MAIN APP
 # ==========================
 st.title("📊 Heikin Ashi Daily Futures Scanner")
-st.caption("End-of-Day | Risk-Aware | 23 Liquid Symbols | **4-Signal Core + Filters**")
+st.caption("End-of-Day | Risk-Aware | 24 Liquid Symbols | **4-Signal Core + Filters**")
 
 # FIXED: Cache-busting + Safe column selection
 @st.cache_data(ttl=3600, show_spinner=False)
