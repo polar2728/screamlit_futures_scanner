@@ -201,7 +201,8 @@ def run_core_scanner() -> pd.DataFrame:
                 "Trend": trend,
                 "RSI": round(last_ha["RSI"], 1) if not np.isnan(last_ha["RSI"]) else "—",
                 "ATR": round(last_ha["ATR"], 2) if not np.isnan(last_ha["ATR"]) else "—",
-                
+                "DC_SL_Long": round(sl_long, 2) if not np.isnan(sl_long) else "—",
+                "DC_SL_Short": round(sl_short, 2) if not np.isnan(sl_short) else "—",
                 # === NEW: 3 FALSE BREAKOUT FILTERS ===
                 "Breakout_Conf": breakout_conf,
                 "Compression": compression_status,
@@ -390,7 +391,7 @@ def run_scanner():
     
     display_cols = [
         "Prev_HA", "Trend", "RSI", "ATR",
-        "Price", "Breakout_Conf", "Compression",
+        "Price", "DC_SL_Long", "DC_SL_Short", "Breakout_Conf", "Compression",
         "ADX_Trend", "Expiry", "Fut_Close", "OI_Change",
         "Next_Expiry", "Next_Fut_Close", "Next_Fut_Bias", "Next_OI_Change"
     ]
