@@ -4,3 +4,4 @@ pandas
 numpy
 yfinance
 bcrypt
+TA-Lib
