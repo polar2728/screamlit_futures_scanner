@@ -85,7 +85,7 @@ def build_trade_thesis(row):
 
     thesis.append(
         f"Trend structure is **{row['Trend']}** with ADX showing "
-        f"**{row['ADX_Trend']}** trend strength."
+        f"**{row['ADX']}** trend strength."
     )
 
     if pd.notna(row.get("Fut_Bias")):
