@@ -6,7 +6,7 @@ import yfinance as yf
 from io import BytesIO
 from datetime import date, timedelta
 import time
-import talib
+import talib  # Add this for ADX
 
 
 # ==========================================================
@@ -94,7 +94,7 @@ def heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ==========================================================
-# ENHANCED CASH SCANNER (WITH HA_COLORS)
+# ENHANCED CASH SCANNER (DC_SL Removed)
 # ==========================================================
 def run_core_scanner() -> pd.DataFrame:
     results = []
@@ -115,24 +115,17 @@ def run_core_scanner() -> pd.DataFrame:
         
         price = df["Close"].iloc[-1]
         
-        # Donchian Channel
+        # Donchian Channel (20 periods) - for breakout only
         don_high = df["High"].rolling(20).max().shift(1).iloc[-1]
         don_low = df["Low"].rolling(20).min().shift(1).iloc[-1]
         breakout_long = price > don_high if not np.isnan(don_high) else False
         breakout_short = price < don_low if not np.isnan(don_low) else False
         
-        # HA Analysis + COLORS (NEW)
+        # HA Analysis
         ha = heikin_ashi(df)
         last3 = ha[["HA_Close", "HA_Open"]].tail(3)
         ha_colors = last3["HA_Close"] > last3["HA_Open"]
         ha_color_prev2, ha_color_prev1, ha_color_today = ha_colors
-        
-        # HA_COLORS column: "RRG" = Red-Red-Green (bull reversal), etc.
-        ha_color_str = f"{0 if not ha_color_prev2 else 1}{0 if not ha_color_prev1 else 1}{1 if ha_color_today else 0}"
-        ha_pattern = {
-            "001": "RRG", "110": "GGR", "111": "GGG", "000": "RRR",
-            "010": "RGR", "100": "GRR", "011": "GRG", "101": "RGG"
-        }.get(ha_color_str, "MIXED")
         
         bull_reversal = (not ha_color_prev2) and (not ha_color_prev1) and ha_color_today
         bear_reversal = ha_color_prev2 and ha_color_prev1 and (not ha_color_today)
@@ -141,12 +134,17 @@ def run_core_scanner() -> pd.DataFrame:
         prev_ha = "BULL" if ha_color_prev1 else "BEAR"
         
         # Indicators
+        ha["EMA20"] = ha["HA_Close"].ewm(span=20, adjust=False).mean()
+        ha["EMA50"] = ha["HA_Close"].ewm(span=50, adjust=False).mean()
+        
+        # RSI
         delta = ha["HA_Close"].diff()
         gain = delta.clip(lower=0).rolling(14).mean()
         loss = (-delta).clip(lower=0).rolling(14).mean()
         rs = gain / (loss + 1e-10)
         rsi = 100 - (100 / (1 + rs)).iloc[-1]
         
+        # ATR & Volume Ratio
         tr = pd.concat([
             df["High"] - df["Low"],
             (df["High"] - df["Close"].shift()).abs(),
@@ -157,21 +155,25 @@ def run_core_scanner() -> pd.DataFrame:
         
         vol_ratio = df["Volume"].iloc[-1] / df["Volume"].rolling(20).mean().iloc[-1] if not df["Volume"].rolling(20).mean().iloc[-1] == 0 else 1
         
-        # ADX
-        adx = talib.ADX(df["High"].values, df["Low"].values, df["Close"].values, timeperiod=14)[-1]
-        adx_trend = "STRONG" if adx > 25 else "WEAK"
+        # ADX Trend (using talib)
+        try:
+            adx = talib.ADX(df["High"].values, df["Low"].values, df["Close"].values, timeperiod=14)[-1]
+            adx_trend = "STRONG" if adx > 25 else "WEAK"
+        except:
+            adx_trend = "WEAK"
         
-        # Trend
-        ha["EMA20"] = ha["HA_Close"].ewm(span=20, adjust=False).mean()
-        ha["EMA50"] = ha["HA_Close"].ewm(span=50, adjust=False).mean()
+        # Trend (HA EMA)
         ha_ema20 = ha["EMA20"].iloc[-1]
         ha_ema50 = ha["EMA50"].iloc[-1]
         trend = "UP" if ha_ema20 > ha_ema50 * 1.02 else "DOWN" if ha_ema20 < ha_ema50 * 0.98 else "SIDE"
         
+        # Compression (low ATR + low ADX)
         compression = "YES" if atr_pct < 0.8 and adx < 20 else "NO"
+        
+        # Breakout Confidence
         breakout_conf = 80 if breakout_long else 20 if breakout_short else 30
         
-        # Score
+        # Base Score
         score = 0
         if breakout_long:
             score += 3
@@ -194,6 +196,7 @@ def run_core_scanner() -> pd.DataFrame:
         if atr_pct < MIN_ATR_PCT:
             score *= 0.5
         
+        # Confidence % (score normalized)
         conf_pct = max(0, min(100, abs(score) * 15))
         
         results.append({
@@ -204,21 +207,21 @@ def run_core_scanner() -> pd.DataFrame:
             "RSI": round(rsi, 1),
             "HA": ha_today,
             "Prev_HA": prev_ha,
-            "HA_Colors": ha_pattern,  # NEW: Visual HA pattern
             "Trend": trend,
             "Breakout": breakout,
             "Breakout_Conf": breakout_conf,
             "Compression": compression,
             "ADX_Trend": adx_trend,
             "Vol_Ratio": round(vol_ratio, 2),
-            "Conf%": round(conf_pct, 1)
+            "Conf%": round(conf_pct, 1),
+            "Market_Regime": market_regime
         })
     
     return pd.DataFrame(results)
 
 
 # ==========================================================
-# ENHANCED FUTURES WITH OI TRENDS
+# ENHANCED FUTURES (NEAR + NEXT MONTH)
 # ==========================================================
 def get_nse_session():
     s = requests.Session()
@@ -260,30 +263,31 @@ def get_futures_by_expiry(fo_df, symbol):
     df = fo_df[mask].copy()
     if df.empty:
         return []
+    
     df["XpryDt"] = pd.to_datetime(df["XpryDt"])
-    return df.sort_values("XpryDt").to_dict('records')
+    df = df.sort_values("XpryDt")
+    return df.to_dict('records')
 
 
-def get_oi_trend(fut_row):
-    """Visual OI trend classification"""
+def futures_conviction(fut_row):
     price_chg = fut_row["ClsPric"] - fut_row["OpnPric"]
     oi_chg = fut_row["ChngInOpnIntrst"]
-    oi_pct = abs(oi_chg / fut_row["OpnIntrst"] * 100) if fut_row["OpnIntrst"] > 0 else 0
     
-    if oi_chg > 0.02 * fut_row["OpnIntrst"] and price_chg > 0:
-        return "LONG BUILDUP", 2
-    elif oi_chg > 0.02 * fut_row["OpnIntrst"] and price_chg < 0:
-        return "SHORT BUILDUP", -2
-    elif oi_chg < -0.02 * fut_row["OpnIntrst"] and price_chg > 0:
-        return "LONG UNWIND", 1
-    elif oi_chg < -0.02 * fut_row["OpnIntrst"] and price_chg < 0:
-        return "SHORT COVERING", -1
-    elif oi_chg > 0:
-        return "LONG ACCUM", 1
-    elif oi_chg < 0:
-        return "SHORT ACCUM", -1
+    if oi_chg > 0 and price_chg > 0:
+        score = 2
+        bias = "BULLISH"
+    elif oi_chg > 0 and price_chg < 0:
+        score = -2
+        bias = "BEARISH"
+    elif oi_chg < 0 and price_chg > 0:
+        score = 1
+        bias = "BULLISH"
     else:
-        return "NEUTRAL", 0
+        score = -1
+        bias = "BEARISH"
+    
+    oi_pct = (oi_chg / fut_row["OpnIntrst"]) * 100 if fut_row["OpnIntrst"] > 0 else 0
+    return score, oi_pct, bias, fut_row["XpryDt"].date(), fut_row["ClsPric"], oi_chg
 
 
 def run_futures_bias():
@@ -297,39 +301,30 @@ def run_futures_bias():
         futures = get_futures_by_expiry(fo_df, sym)
         if len(futures) >= 1:
             near_fut = futures[0]
-            oi_trend, score = get_oi_trend(near_fut)
-            
-            fut_data = {
+            score1, oi1, bias1, exp1, close1, oi_chg1 = futures_conviction(near_fut)
+            results.append({
                 "Ticker": sym,
-                "Fut_Score": score,
-                "Fut_Bias": oi_trend,  # Visual OI trend
-                "Expiry": near_fut["XpryDt"].date(),
-                "Fut_Close": round(near_fut["ClsPric"], 2),
-                "OI_Change": near_fut["ChngInOpnIntrst"]
-            }
-            
-            if len(futures) > 1:
-                next_fut = futures[1]
-                next_trend, _ = get_oi_trend(next_fut)
-                fut_data.update({
-                    "Next_Expiry": next_fut["XpryDt"].date(),
-                    "Next_Fut_Close": round(next_fut["ClsPric"], 2),
-                    "Next_OI_Change": next_fut["ChngInOpnIntrst"],
-                    "Next_Fut_Bias": next_trend
-                })
-            
-            results.append(fut_data)
+                "Fut_Score": score1,
+                "Fut_Bias": bias1,
+                "Expiry": exp1,
+                "Fut_Close": round(close1, 2),
+                "OI_Change": oi_chg1,
+                "Next_Expiry": futures[1]["XpryDt"].date() if len(futures) > 1 else None,
+                "Next_Fut_Close": round(futures[1]["ClsPric"], 2) if len(futures) > 1 else None,
+                "Next_Fut_Bias": futures_conviction(futures[1])[2] if len(futures) > 1 else None,
+                "Next_OI_Change": futures[1]["ChngInOpnIntrst"] if len(futures) > 1 else None
+            })
     
     return pd.DataFrame(results)
 
 
 # ==========================================================
-# FINAL DASHBOARD
+# FINAL DASHBOARD (DC_SL Removed)
 # ==========================================================
 def run_scanner():
     print("Running enhanced cash scanner...")
     cash_df = run_core_scanner()
-    print("Running OI trend futures...")
+    print("Running enhanced futures...")
     try:
         fut_df = run_futures_bias()
     except Exception as e:
@@ -339,11 +334,13 @@ def run_scanner():
     if cash_df.empty:
         return pd.DataFrame()
     
+    # Merge
     df = cash_df.merge(fut_df, on="Ticker", how="left")
     df["Fut_Score"] = df["Fut_Score"].fillna(0)
     df["Fut_Bias"] = df["Fut_Bias"].fillna("NO FUT")
     df["Final_Score"] = df["Score"] + df["Fut_Score"]
     
+    # Verdict
     conditions = [
         df["Final_Score"] >= 5,
         df["Final_Score"] <= -5,
@@ -353,9 +350,10 @@ def run_scanner():
     choices = ["STRONG BUY", "STRONG SELL", "WEAK BUY", "WEAK SELL"]
     df["Final_Verdict"] = np.select(conditions, choices, default="NEUTRAL")
     
+    # Reorder columns (DC_SL removed)
     column_order = [
         "Ticker", "Final_Score", "Final_Verdict", "Breakout", "HA", "Fut_Bias", 
-        "Vol_Ratio", "Conf%", "Prev_HA", "HA_Colors", "Trend", "RSI", "ATR", "Price", 
+        "Vol_Ratio", "Conf%", "Prev_HA", "Trend", "RSI", "ATR", "Price", 
         "Breakout_Conf", "Compression", "ADX_Trend", 
         "Expiry", "Fut_Close", "OI_Change", "Next_Expiry", "Next_Fut_Close", 
         "Next_Fut_Bias", "Next_OI_Change"
@@ -370,7 +368,7 @@ def run_scanner():
 if __name__ == "__main__":
     dashboard = run_scanner()
     if not dashboard.empty:
-        print("\n=== ENHANCED SCANNER WITH HA_COLORS & OI TRENDS ===")
+        print("\n=== ENHANCED SCANNER DASHBOARD ===")
         print(dashboard.to_string(index=False))
         dashboard.to_csv("scanner_output.csv", index=False)
         print(f"\nSaved to scanner_output.csv | Rows: {len(dashboard)}")
