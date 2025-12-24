@@ -78,7 +78,7 @@ else:
     st.success(f"Scan complete – {len(report)} results found")
 
     # === PINNED CORE COLUMNS (Decision columns)
-    pinned_cols = ["Ticker", "Final_Score", "Final_Verdict", "Breakout", "HA", "Fut_Bias"]
+    pinned_cols = ["Ticker", "Final_Score", "Final_Verdict", "Breakout", "HA"]
 
     # === DATAFRAME WITH PINNED COLUMNS ===
     st.dataframe(
@@ -115,8 +115,8 @@ else:
     if not strong_df.empty:
         st.success(f"**{len(strong_df)} STRONG BUY signals** - Execute tomorrow!")
         st.dataframe(
-            strong_df[["Ticker", "Final_Score", "Breakout", "HA", "Fut_Bias", "Vol_Ratio", 
-                      "Breakout_Conf", "Compression", "ADX_Trend"]],
+            strong_df[["Ticker", "Final_Score", "Breakout", "HA", "Vol_Ratio", 
+                      "Breakout", "Compression", "ADX_Trend"]],
             width="stretch",
             height=200
         )
@@ -149,7 +149,7 @@ else:
     # Download
     csv = report.to_csv(index=False).encode()
     st.download_button(
-        label="📥 Download Full CSV (23 cols)",
+        label="📥 Download Full CSV ",
         data=csv,
         file_name=f"HA_Scanner_{date.today()}.csv",
         mime="text/csv"
