@@ -116,7 +116,7 @@ else:
         st.success(f"**{len(strong_df)} STRONG BUY signals** - Execute tomorrow!")
         st.dataframe(
             strong_df[["Ticker", "Final_Score", "Breakout", "HA", "Vol_Ratio", 
-                      "Breakout", "Compression", "ADX_Trend"]],
+                      "Breakout", "Compression", "ADX"]],
             width="stretch",
             height=200
         )
@@ -127,9 +127,9 @@ else:
     st.markdown("### 🛡️ **False Breakout Filters**")
     col1, col2, col3 = st.columns(3)
     
-    confirmed = len(report[(report["Final_Score"] >= 5) & (report["Breakout_Conf"] == "YES")])
+    confirmed = len(report[(report["Final_Score"] >= 5) & (report["Breakout"] == "YES")])
     compressed = len(report[(report["Final_Score"] >= 5) & (report["Compression"] == "YES")])
-    strong_trend = len(report[(report["Final_Score"] >= 5) & (report["ADX_Trend"] == "STRONG")])
+    strong_trend = len(report[(report["Final_Score"] >= 5) & (report["ADX"] == "STRONG")])
     
     col1.metric("2-Bar Confirmed", confirmed)
     col2.metric("Compression Setup", compressed)
