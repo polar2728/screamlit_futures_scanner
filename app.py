@@ -7,7 +7,11 @@ from scanner import run_scanner
 # ==========================
 # PAGE CONFIG
 # ==========================
-st.set_page_config(page_title="HA Daily Scanner", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="HA Daily Scanner",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # ==========================
 # LOGIN
@@ -21,6 +25,7 @@ if not st.session_state.authenticated:
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Login")
+
         if submitted:
             if username == st.secrets["auth"]["user_name"]:
                 stored_hash = st.secrets["auth"]["password"].encode()
@@ -35,34 +40,86 @@ if not st.session_state.authenticated:
     st.stop()
 
 # ==========================
-# SIDEBAR (After Login)
+# SIDEBAR
 # ==========================
 with st.sidebar:
     st.success("✅ Authenticated")
+
     if st.button("Logout"):
         st.session_state.authenticated = False
         st.rerun()
 
     st.markdown("### Scanner Controls")
     auto_refresh = st.checkbox("Auto-refresh every 5 min", value=False)
+
     st.markdown("### Last Run")
     if "last_run" in st.session_state:
         st.caption(st.session_state.last_run)
 
 # ==========================
+# HELPERS
+# ==========================
+def reco_icon(verdict):
+    return {
+        "STRONG BUY": "🟢🚀",
+        "WEAK BUY": "🟡📈",
+        "NEUTRAL": "⚪⏸️",
+        "WEAK SELL": "🟡📉",
+        "STRONG SELL": "🔴💣"
+    }.get(verdict, "❓")
+
+def build_trade_thesis(row):
+    thesis = []
+
+    thesis.append(
+        f"**Market Regime:** {row['Market_Regime']} — "
+        f"{'supports' if row['Market_Regime']=='RISK_ON' else 'does not favor'} long trades."
+    )
+
+    if row["Breakout"] == "LONG":
+        thesis.append("Price has broken above recent resistance (Donchian breakout).")
+    elif row["Breakout"] == "SHORT":
+        thesis.append("Price has broken below recent support.")
+
+    thesis.append(f"Heikin Ashi candles are **{row['HA']}**, indicating short-term momentum.")
+
+    thesis.append(
+        f"Trend structure is **{row['Trend']}** with ADX showing "
+        f"**{row['ADX_Trend']}** trend strength."
+    )
+
+    if pd.notna(row.get("Fut_Bias")):
+        thesis.append(f"Near-month futures indicate **{row['Fut_Bias']}**.")
+
+    if pd.notna(row.get("Next_Fut_Bias")):
+        thesis.append(f"Next-month futures show **{row['Next_Fut_Bias']}**, reflecting forward positioning.")
+
+    thesis.append(
+        f"**Final Score:** {row['Final_Score']} → **{row['Final_Verdict']}**"
+    )
+
+    recommendation = (
+        "✅ **Hold / Add on dips** with defined risk."
+        if row["Final_Verdict"] in ["STRONG BUY", "WEAK BUY"]
+        else "⚠️ **Avoid fresh longs / Reduce exposure**"
+        if row["Final_Verdict"] in ["WEAK SELL", "STRONG SELL"]
+        else "⏸️ **Wait for confirmation**"
+    )
+
+    return "\n\n".join(thesis), recommendation
+
+# ==========================
 # MAIN APP
 # ==========================
 st.title("📊 Heikin Ashi Daily Futures Scanner")
-st.caption("End-of-Day | Risk-Aware | 24 Liquid Symbols | **4-Signal Core + Filters**")
+st.caption("End-of-Day | Risk-Aware | Cash + Futures Conviction Engine")
 
-# FIXED: Cache-busting + Safe column selection
 @st.cache_data(ttl=3600, show_spinner=False)
 def cached_scanner():
     return run_scanner()
 
-# Force cache clear on button press
+# Run scanner
 if st.button("🔄 Run Scanner Now", type="primary") or ("last_run" not in st.session_state):
-    # Clear cache explicitly
     cached_scanner.clear()
     with st.spinner("Running scanner..."):
         report = cached_scanner()
@@ -71,16 +128,18 @@ if st.button("🔄 Run Scanner Now", type="primary") or ("last_run" not in st.se
 else:
     report = cached_scanner()
 
-# Display results
+# ==========================
+# DISPLAY RESULTS
+# ==========================
 if report.empty:
     st.info("No signals generated today.")
 else:
-    st.success(f"Scan complete – {len(report)} results found")
+    report.insert(1, "Reco", report["Final_Verdict"].apply(reco_icon))
 
-    # === PINNED CORE COLUMNS (Decision columns)
-    pinned_cols = ["Ticker", "Final_Score", "Final_Verdict", "Breakout", "HA"]
+    st.success(f"Scan complete – {len(report)} symbols analyzed")
 
-    # === DATAFRAME WITH PINNED COLUMNS ===
+    pinned_cols = ["Ticker", "Reco", "Final_Score", "Final_Verdict"]
+
     st.dataframe(
         report,
         width="stretch",
@@ -92,69 +151,48 @@ else:
         }
     )
 
-    # === UPDATED METRICS (New scoring: STRONG ≥5, WEAK 1-4.9) ===
+    # ==========================
+    # METRICS
+    # ==========================
     col1, col2, col3, col4, col5 = st.columns(5)
-    
-    strong_buy = (report["Final_Score"] >= 5).sum()
-    strong_sell = (report["Final_Score"] <= -5).sum()
-    weak_buy = ((report["Final_Score"] > 1) & (report["Final_Score"] < 5)).sum()
-    weak_sell = ((report["Final_Score"] < -1) & (report["Final_Score"] > -5)).sum()
-    neutral = (abs(report["Final_Score"]) <= 1).sum()
 
-    col1.metric("Total", len(report), delta=f"+{len(report)}")
-    col2.metric("STRONG BUY", strong_buy, delta=f"+{strong_buy}")
-    col3.metric("STRONG SELL", strong_sell, delta=f"+{strong_sell}")
-    col4.metric("WEAK", weak_buy + weak_sell, delta=f"+{weak_buy + weak_sell}")
-    col5.metric("NEUTRAL", neutral, delta=f"+{neutral}")
+    col1.metric("Total", len(report))
+    col2.metric("STRONG BUY", (report["Final_Score"] >= 5).sum())
+    col3.metric("STRONG SELL", (report["Final_Score"] <= -5).sum())
+    col4.metric("WEAK", ((report["Final_Score"].abs() > 1) & (report["Final_Score"].abs() < 5)).sum())
+    col5.metric("NEUTRAL", (report["Final_Score"].abs() <= 1).sum())
 
-    # === TRADE RECOMMENDATIONS ===
+    # ==========================
+    # TRADE EXPLAINER
+    # ==========================
     st.markdown("---")
-    st.markdown("### 🚀 **TRADE RECOMMENDATIONS**")
-    
-    strong_df = report[report["Final_Score"] >= 5].copy()
-    if not strong_df.empty:
-        st.success(f"**{len(strong_df)} STRONG BUY signals** - Execute tomorrow!")
-        st.dataframe(
-            strong_df[["Ticker", "Final_Score", "Breakout", "HA", "Vol_Ratio", 
-                      "Breakout", "Compression", "ADX"]],
-            width="stretch",
-            height=200
-        )
-    else:
-        st.warning("No STRONG BUY signals today")
+    st.markdown("## 🧠 Trade Explanation Engine")
 
-    # === FALSE BREAKOUT FILTER SUMMARY ===
-    st.markdown("### 🛡️ **False Breakout Filters**")
-    col1, col2, col3 = st.columns(3)
-    
-    confirmed = len(report[(report["Final_Score"] >= 5) & (report["Breakout"] == "YES")])
-    compressed = len(report[(report["Final_Score"] >= 5) & (report["Compression"] == "YES")])
-    strong_trend = len(report[(report["Final_Score"] >= 5) & (report["ADX"] == "STRONG")])
-    
-    col1.metric("2-Bar Confirmed", confirmed)
-    col2.metric("Compression Setup", compressed)
-    col3.metric("ADX Strong", strong_trend)
+    selected = st.selectbox(
+        "Select a ticker to explain:",
+        report["Ticker"].tolist()
+    )
 
-    # === POSITION SIZING GUIDE ===
-    st.markdown("### 💰 **Position Sizing (₹2.5L Capital, 1% Risk)**")
-    if not strong_df.empty:
-        for idx, row in strong_df.head(3).iterrows():
-            ticker = row["Ticker"]
-            vol_ratio = row["Vol_Ratio"]
-            score = row["Final_Score"]
-            
-            size = "HIGH" if vol_ratio > 2 else "MEDIUM" if vol_ratio > 1.2 else "LOW"
-            st.caption(f"**{ticker}**: Score {score} | Vol {vol_ratio}x | Size: **{size}**")
+    row = report[report["Ticker"] == selected].iloc[0]
+    thesis, recommendation = build_trade_thesis(row)
 
-    # Download
+    st.subheader(f"{row['Reco']} {row['Ticker']} — {row['Final_Verdict']}")
+    st.markdown(thesis)
+    st.success(recommendation)
+
+    # ==========================
+    # DOWNLOAD
+    # ==========================
     csv = report.to_csv(index=False).encode()
     st.download_button(
-        label="📥 Download Full CSV ",
+        "📥 Download Full CSV",
         data=csv,
         file_name=f"HA_Scanner_{date.today()}.csv",
         mime="text/csv"
     )
 
-# Auto-refresh
+# ==========================
+# AUTO REFRESH
+# ==========================
 if auto_refresh:
-    st.autorefresh(interval=5*60*1000, key="auto")
+    st.autorefresh(interval=5 * 60 * 1000, key="auto")
