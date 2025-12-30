@@ -200,6 +200,12 @@ def analyze_cash(name, symbol, market_regime):
     score = 0
     score += 3 if breakout == "LONG" else -3 if breakout == "SHORT" else 0
     score += 1 if ha_today == "BULL" else -1
+
+    # NEW: Large HA body contribution (+0.5 for strong momentum candle)
+    ha_body = abs(ha["HA_Close"].iloc[-1].item() - ha["HA_Open"].iloc[-1].item())
+    if ha_body > atr * 0.5:
+        score += 0.5 if ha_today == "BULL" else -0.5
+
     if BONUS_VOL_RATIO and vol_ratio > 2 and breakout != "NONE":
         score += 1
     if atr_pct < MIN_ATR_PCT:
