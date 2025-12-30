@@ -157,7 +157,7 @@ else:
 
     st.dataframe(
         report,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             col: st.column_config.Column(pinned=True)
