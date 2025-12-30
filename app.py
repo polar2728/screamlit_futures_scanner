@@ -2,7 +2,7 @@ import streamlit as st
 import bcrypt
 import pandas as pd
 from datetime import datetime, date
-from scanner import run_scanner
+from scanner import run_scanner, USE_ALL_FNO  # Import the flag from scanner.py
 
 # ==========================
 # PAGE CONFIG
@@ -50,6 +50,14 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("### Scanner Controls")
+
+    # NEW: Toggle for F&O universe
+    use_all_fno = st.checkbox(
+        "Scan ALL F&O Stocks (~200+)",
+        value=True,
+        help="Uncheck to scan only the original 24 core stocks"
+    )
+
     auto_refresh = st.checkbox("Auto-refresh every 5 min", value=False)
 
     st.markdown("### Last Run")
@@ -88,22 +96,23 @@ def build_trade_thesis(row):
         f"**{row['ADX']}** trend strength."
     )
 
-    if pd.notna(row.get("Fut_Bias")):
-        thesis.append(f"Near-month futures indicate **{row['Fut_Bias']}**.")
+    # Futures bias (if available)
+    if pd.notna(row.get("F1_Signal")):
+        thesis.append(f"Near-month futures: **{row['F1_Signal']}**")
 
-    if pd.notna(row.get("Next_Fut_Bias")):
-        thesis.append(f"Next-month futures show **{row['Next_Fut_Bias']}**, reflecting forward positioning.")
+    if pd.notna(row.get("F2_Signal")):
+        thesis.append(f"Next-month futures: **{row['F2_Signal']}**")
 
     thesis.append(
         f"**Final Score:** {row['Final_Score']} → **{row['Final_Verdict']}**"
     )
 
     recommendation = (
-        "✅ **Hold / Add on dips** with defined risk."
+        "✅ **Consider long entry / Add on dips** with risk management."
         if row["Final_Verdict"] in ["STRONG BUY", "WEAK BUY"]
         else "⚠️ **Avoid fresh longs / Reduce exposure**"
         if row["Final_Verdict"] in ["WEAK SELL", "STRONG SELL"]
-        else "⏸️ **Wait for confirmation**"
+        else "⏸️ **Wait for better setup**"
     )
 
     return "\n\n".join(thesis), recommendation
@@ -114,35 +123,44 @@ def build_trade_thesis(row):
 st.title("📊 Heikin Ashi Daily Futures Scanner")
 st.caption("End-of-Day | Risk-Aware | Cash + Futures Conviction Engine")
 
+# Dynamically set the flag in scanner.py before running
+# This ensures the scanner uses the user's choice
+from scanner import USE_ALL_FNO as scanner_use_all_fno
+scanner_use_all_fno = use_all_fno  # Override the module-level variable
+
 @st.cache_data(ttl=3600, show_spinner=False)
-def cached_scanner():
+def cached_scanner(_use_all_fno: bool):
+    # We pass a dummy arg to invalidate cache when toggle changes
     return run_scanner()
 
 # Run scanner
-if st.button("🔄 Run Scanner Now", type="primary") or ("last_run" not in st.session_state):
+run_now = st.button("🔄 Run Scanner Now", type="primary")
+
+if run_now or ("last_run" not in st.session_state):
     cached_scanner.clear()
-    with st.spinner("Running scanner..."):
-        report = cached_scanner()
+    with st.spinner(f"Running scanner on {'ALL F&O' if use_all_fno else 'Core 24'} stocks..."):
+        report = cached_scanner(use_all_fno)
     st.session_state.last_run = datetime.now().strftime("%Y-%m-%d %H:%M")
     st.rerun()
 else:
-    report = cached_scanner()
+    report = cached_scanner(use_all_fno)
 
 # ==========================
 # DISPLAY RESULTS
 # ==========================
 if report.empty:
-    st.info("No signals generated today.")
+    st.info("No data returned. Try running the scanner.")
 else:
     report.insert(1, "Reco", report["Final_Verdict"].apply(reco_icon))
 
-    st.success(f"Scan complete – {len(report)} symbols analyzed")
+    mode = "ALL F&O (~200+)" if use_all_fno else "Core 24 Stocks"
+    st.success(f"Scan complete – {len(report)} symbols analyzed ({mode})")
 
     pinned_cols = ["Ticker", "Reco", "Final_Score", "Final_Verdict"]
 
     st.dataframe(
         report,
-        width="stretch",
+        use_container_width=True,
         hide_index=True,
         column_config={
             col: st.column_config.Column(pinned=True)
@@ -156,10 +174,10 @@ else:
     # ==========================
     col1, col2, col3, col4, col5 = st.columns(5)
 
-    col1.metric("Total", len(report))
+    col1.metric("Total Symbols", len(report))
     col2.metric("STRONG BUY", (report["Final_Score"] >= 5).sum())
     col3.metric("STRONG SELL", (report["Final_Score"] <= -5).sum())
-    col4.metric("WEAK", ((report["Final_Score"].abs() > 1) & (report["Final_Score"].abs() < 5)).sum())
+    col4.metric("WEAK Signals", ((report["Final_Score"].abs() > 1) & (report["Final_Score"].abs() < 5)).sum())
     col5.metric("NEUTRAL", (report["Final_Score"].abs() <= 1).sum())
 
     # ==========================
@@ -169,8 +187,9 @@ else:
     st.markdown("## 🧠 Trade Explanation Engine")
 
     selected = st.selectbox(
-        "Select a ticker to explain:",
-        report["Ticker"].tolist()
+        "Select a ticker for detailed analysis:",
+        options=report["Ticker"].tolist(),
+        index=0
     )
 
     row = report[report["Ticker"] == selected].iloc[0]
@@ -187,7 +206,7 @@ else:
     st.download_button(
         "📥 Download Full CSV",
         data=csv,
-        file_name=f"HA_Scanner_{date.today()}.csv",
+        file_name=f"HA_Scanner_{mode.replace(' ', '_')}_{date.today()}.csv",
         mime="text/csv"
     )
 
