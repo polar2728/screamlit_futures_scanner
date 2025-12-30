@@ -2,7 +2,8 @@ import streamlit as st
 import bcrypt
 import pandas as pd
 from datetime import datetime, date
-from scanner import run_scanner  # Only import the function
+import scanner  # Import the module itself (not the flag)
+from scanner import run_scanner
 
 # ==========================
 # PAGE CONFIG
@@ -51,7 +52,7 @@ with st.sidebar:
 
     st.markdown("### Scanner Controls")
 
-    # NEW: Toggle for F&O universe
+    # Toggle for full F&O or core list
     use_all_fno = st.checkbox(
         "Scan ALL F&O Stocks (~200+)",
         value=True,
@@ -96,7 +97,6 @@ def build_trade_thesis(row):
         f"**{row['ADX']}** trend strength."
     )
 
-    # Futures bias (if available)
     if pd.notna(row.get("F1_Signal")):
         thesis.append(f"Near-month futures: **{row['F1_Signal']}**")
 
@@ -125,9 +125,8 @@ st.caption("End-of-Day | Risk-Aware | Cash + Futures Conviction Engine")
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def cached_scanner(_use_all_fno: bool):
-    # IMPORTANT: Set the flag in scanner.py module
-    import scanner
-    scanner.USE_ALL_FNO = _use_all_fno  # Directly modify the module attribute
+    # Set the flag directly in the scanner module
+    scanner.USE_ALL_FNO = _use_all_fno
     return run_scanner()
 
 # Run scanner
@@ -135,7 +134,8 @@ run_now = st.button("🔄 Run Scanner Now", type="primary")
 
 if run_now or ("last_run" not in st.session_state):
     cached_scanner.clear()
-    with st.spinner(f"Running scanner on {'ALL F&O' if use_all_fno else 'Core 24'} stocks..."):
+    mode = "ALL F&O (~200+)" if use_all_fno else "Core 24 Stocks"
+    with st.spinner(f"Running scanner on {mode}..."):
         report = cached_scanner(use_all_fno)
     st.session_state.last_run = datetime.now().strftime("%Y-%m-%d %H:%M")
     st.rerun()
