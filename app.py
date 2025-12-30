@@ -2,7 +2,7 @@ import streamlit as st
 import bcrypt
 import pandas as pd
 from datetime import datetime, date
-from scanner import run_scanner, USE_ALL_FNO  # Import the flag from scanner.py
+from scanner import run_scanner  # Only import the function
 
 # ==========================
 # PAGE CONFIG
@@ -123,14 +123,11 @@ def build_trade_thesis(row):
 st.title("📊 Heikin Ashi Daily Futures Scanner")
 st.caption("End-of-Day | Risk-Aware | Cash + Futures Conviction Engine")
 
-# Dynamically set the flag in scanner.py before running
-# This ensures the scanner uses the user's choice
-from scanner import USE_ALL_FNO as scanner_use_all_fno
-scanner_use_all_fno = use_all_fno  # Override the module-level variable
-
 @st.cache_data(ttl=3600, show_spinner=False)
 def cached_scanner(_use_all_fno: bool):
-    # We pass a dummy arg to invalidate cache when toggle changes
+    # IMPORTANT: Set the flag in scanner.py module
+    import scanner
+    scanner.USE_ALL_FNO = _use_all_fno  # Directly modify the module attribute
     return run_scanner()
 
 # Run scanner
