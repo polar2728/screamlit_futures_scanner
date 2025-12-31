@@ -2,7 +2,7 @@ import streamlit as st
 import bcrypt
 import pandas as pd
 from datetime import datetime, date
-import scanner
+import scanner  # Import the module itself
 from scanner import run_scanner
 
 # ==========================
@@ -121,17 +121,21 @@ def build_trade_thesis(row):
 st.title("📊 Donchian Breakout Daily Futures Scanner")
 st.caption("End-of-Day | Risk-Aware | Cash + Futures Conviction Engine")
 
-# General purpose readout
+# ==========================
+# GENERAL PURPOSE READOUT / KEY CONCEPTS
+# ==========================
 with st.expander("📘 Scanner Key Concepts & Interpretation Guide", expanded=False):
     st.markdown("""
     **How to Read This Scanner**:
     - **Final Score** = Donchian breakout + Heikin-Ashi momentum + Volume bonus – Low volatility penalty
     - Higher absolute score = stronger signal
 
-    **ATR%**: Measures volatility relative to price
+    **ATR%** (Average True Range %):
+    - Measures daily price volatility relative to price
     - < 0.8% = low volatility (potential compression)
 
-    **ADX**: Trend strength
+    **ADX** (Average Directional Index):
+    - Measures trend strength
     - > 25 = strong trend
     - < 20 = sideways
 
@@ -139,8 +143,8 @@ with st.expander("📘 Scanner Key Concepts & Interpretation Guide", expanded=Fa
     - ATR% < 0.8% AND ADX < 20 → "coiled spring" setup
     - Breakouts from compression are often explosive
 
-    **Highlighted (bold) rows** = Highest conviction:
-    - WEAK/STRONG BUY/SELL
+    **Bold rows** = Highest conviction setups:
+    - WEAK/STRONG BUY or SELL
     - AND (Compression = YES OR ADX > 25)
     - AND Near-month futures = Long Buildup or Short Covering
     """)
@@ -173,9 +177,13 @@ else:
     mode = "ALL F&O (~200+)" if use_all_fno else "Core 24 Stocks"
     st.success(f"Scan complete – {len(report)} symbols analyzed ({mode})")
 
-    # === HIGHLIGHT HIGH-CONVICTION ROWS ===
+    # Clean 2-decimal display
+    display_report = report.copy()
+    float_cols = display_report.select_dtypes(include=['float64', 'float32']).columns
+    display_report[float_cols] = display_report[float_cols].round(2)
+
+    # Highlight high-conviction rows
     def highlight_row(row):
-        # Conditions
         is_signal = row["Final_Verdict"] in ["STRONG BUY", "WEAK BUY", "STRONG SELL", "WEAK SELL"]
         compression_or_strong_trend = (row["Compression"] == "YES") or (row["ADX"] > 25)
         good_futures = pd.notna(row.get("F1_Signal")) and row["F1_Signal"] in ["Long Buildup", "Short Covering"]
@@ -184,7 +192,7 @@ else:
             return ['font-weight: bold'] * len(row)
         return [''] * len(row)
 
-    styled_report = report.style.apply(highlight_row, axis=1)
+    styled_report = display_report.style.apply(highlight_row, axis=1)
 
     pinned_cols = ["Ticker", "Reco", "Final_Score", "Final_Verdict"]
 
@@ -195,7 +203,7 @@ else:
         column_config={
             col: st.column_config.Column(pinned=True)
             for col in pinned_cols
-            if col in report.columns
+            if col in display_report.columns
         }
     )
 
