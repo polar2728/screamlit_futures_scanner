@@ -2,14 +2,14 @@ import streamlit as st
 import bcrypt
 import pandas as pd
 from datetime import datetime, date
-import scanner  # Import the module itself (not the flag)
+import scanner  # Import the module itself
 from scanner import run_scanner
 
 # ==========================
 # PAGE CONFIG
 # ==========================
 st.set_page_config(
-    page_title="HA Daily Scanner",
+    page_title="Donchian Breakout Daily Scanner",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -52,7 +52,6 @@ with st.sidebar:
 
     st.markdown("### Scanner Controls")
 
-    # Toggle for full F&O or core list
     use_all_fno = st.checkbox(
         "Scan ALL F&O Stocks (~200+)",
         value=True,
@@ -86,15 +85,14 @@ def build_trade_thesis(row):
     )
 
     if row["Breakout"] == "LONG":
-        thesis.append("Price has broken above recent resistance (Donchian breakout).")
+        thesis.append("Price has broken above recent 20-day high → **Donchian breakout bullish**.")
     elif row["Breakout"] == "SHORT":
-        thesis.append("Price has broken below recent support.")
+        thesis.append("Price has broken below recent 20-day low → **Donchian breakout bearish**.")
 
-    thesis.append(f"Heikin Ashi candles are **{row['HA']}**, indicating short-term momentum.")
+    thesis.append(f"Heikin Ashi candle today is **{row['HA']}** → short-term momentum direction.")
 
     thesis.append(
-        f"Trend structure is **{row['Trend']}** with ADX showing "
-        f"**{row['ADX']}** trend strength."
+        f"Trend structure is **{row['Trend']}** with ADX = **{row['ADX']:.1f}** (higher = stronger trend)."
     )
 
     if pd.notna(row.get("F1_Signal")):
@@ -108,11 +106,11 @@ def build_trade_thesis(row):
     )
 
     recommendation = (
-        "✅ **Consider long entry / Add on dips** with risk management."
+        "✅ **Consider long entry / Add on dips** with tight risk (especially if Compression = YES)."
         if row["Final_Verdict"] in ["STRONG BUY", "WEAK BUY"]
         else "⚠️ **Avoid fresh longs / Reduce exposure**"
         if row["Final_Verdict"] in ["WEAK SELL", "STRONG SELL"]
-        else "⏸️ **Wait for better setup**"
+        else "⏸️ **Wait for better setup or confirmation**"
     )
 
     return "\n\n".join(thesis), recommendation
@@ -120,16 +118,47 @@ def build_trade_thesis(row):
 # ==========================
 # MAIN APP
 # ==========================
-st.title("📊 Heikin Ashi Daily Futures Scanner")
+st.title("📊 Donchian Breakout Daily Futures Scanner")
 st.caption("End-of-Day | Risk-Aware | Cash + Futures Conviction Engine")
 
+# ==========================
+# GENERAL PURPOSE READOUT / KEY CONCEPTS (NEW SECTION)
+# ==========================
+with st.expander("📘 Scanner Key Concepts & Interpretation Guide", expanded=False):
+    st.markdown("""
+    **How to Read This Scanner**:
+    - **Final Score** = Momentum (Donchian breakout) + Heikin-Ashi direction + Volume bonus – Low volatility penalty
+    - Higher absolute score = stronger conviction signal
+
+    **ATR%** (Average True Range %):
+    - Measures daily price volatility relative to price
+    - < 0.8% = very quiet (potential setup forming)
+    - > 2% = high volatility (risk of whipsaws)
+
+    **ADX** (Average Directional Index):
+    - Measures trend strength (0–100)
+    - > 25 = strong trend
+    - < 20 = sideways / no clear trend
+
+    **Compression = YES** 🔥:
+    - ATR% < 0.8% AND ADX < 20
+    - Stock is in tight consolidation ("coiled spring")
+    - Breakouts from compression often lead to explosive moves
+    - Highest conviction setups = Breakout + Compression = YES + Bullish HA + Futures buildup
+
+    **Best Long Setups**:
+    - WEAK/STRONG BUY + Compression = YES + F1_Signal = Long Buildup or Short Covering
+
+    """)
+
+# ==========================
+# SCANNER LOGIC
+# ==========================
 @st.cache_data(ttl=3600, show_spinner=False)
 def cached_scanner(_use_all_fno: bool):
-    # Set the flag directly in the scanner module
     scanner.USE_ALL_FNO = _use_all_fno
     return run_scanner()
 
-# Run scanner
 run_now = st.button("🔄 Run Scanner Now", type="primary")
 
 if run_now or ("last_run" not in st.session_state):
@@ -203,7 +232,7 @@ else:
     st.download_button(
         "📥 Download Full CSV",
         data=csv,
-        file_name=f"HA_Scanner_{mode.replace(' ', '_')}_{date.today()}.csv",
+        file_name=f"Donchian_Scanner_{mode.replace(' ', '_')}_{date.today()}.csv",
         mime="text/csv"
     )
 
