@@ -2,7 +2,7 @@ import streamlit as st
 import bcrypt
 import pandas as pd
 from datetime import datetime, date
-import scanner  # Import the module itself
+import scanner
 from scanner import run_scanner
 
 # ==========================
@@ -121,39 +121,30 @@ def build_trade_thesis(row):
 st.title("📊 Donchian Breakout Daily Futures Scanner")
 st.caption("End-of-Day | Risk-Aware | Cash + Futures Conviction Engine")
 
-# ==========================
-# GENERAL PURPOSE READOUT / KEY CONCEPTS (NEW SECTION)
-# ==========================
+# General purpose readout
 with st.expander("📘 Scanner Key Concepts & Interpretation Guide", expanded=False):
     st.markdown("""
     **How to Read This Scanner**:
-    - **Final Score** = Momentum (Donchian breakout) + Heikin-Ashi direction + Volume bonus – Low volatility penalty
-    - Higher absolute score = stronger conviction signal
+    - **Final Score** = Donchian breakout + Heikin-Ashi momentum + Volume bonus – Low volatility penalty
+    - Higher absolute score = stronger signal
 
-    **ATR%** (Average True Range %):
-    - Measures daily price volatility relative to price
-    - < 0.8% = very quiet (potential setup forming)
-    - > 2% = high volatility (risk of whipsaws)
+    **ATR%**: Measures volatility relative to price
+    - < 0.8% = low volatility (potential compression)
 
-    **ADX** (Average Directional Index):
-    - Measures trend strength (0–100)
+    **ADX**: Trend strength
     - > 25 = strong trend
-    - < 20 = sideways / no clear trend
+    - < 20 = sideways
 
     **Compression = YES** 🔥:
-    - ATR% < 0.8% AND ADX < 20
-    - Stock is in tight consolidation ("coiled spring")
-    - Breakouts from compression often lead to explosive moves
-    - Highest conviction setups = Breakout + Compression = YES + Bullish HA + Futures buildup
+    - ATR% < 0.8% AND ADX < 20 → "coiled spring" setup
+    - Breakouts from compression are often explosive
 
-    **Best Long Setups**:
-    - WEAK/STRONG BUY + Compression = YES + F1_Signal = Long Buildup or Short Covering
-
+    **Highlighted (bold) rows** = Highest conviction:
+    - WEAK/STRONG BUY/SELL
+    - AND (Compression = YES OR ADX > 25)
+    - AND Near-month futures = Long Buildup or Short Covering
     """)
 
-# ==========================
-# SCANNER LOGIC
-# ==========================
 @st.cache_data(ttl=3600, show_spinner=False)
 def cached_scanner(_use_all_fno: bool):
     scanner.USE_ALL_FNO = _use_all_fno
@@ -182,10 +173,23 @@ else:
     mode = "ALL F&O (~200+)" if use_all_fno else "Core 24 Stocks"
     st.success(f"Scan complete – {len(report)} symbols analyzed ({mode})")
 
+    # === HIGHLIGHT HIGH-CONVICTION ROWS ===
+    def highlight_row(row):
+        # Conditions
+        is_signal = row["Final_Verdict"] in ["STRONG BUY", "WEAK BUY", "STRONG SELL", "WEAK SELL"]
+        compression_or_strong_trend = (row["Compression"] == "YES") or (row["ADX"] > 25)
+        good_futures = pd.notna(row.get("F1_Signal")) and row["F1_Signal"] in ["Long Buildup", "Short Covering"]
+
+        if is_signal and compression_or_strong_trend and good_futures:
+            return ['font-weight: bold'] * len(row)
+        return [''] * len(row)
+
+    styled_report = report.style.apply(highlight_row, axis=1)
+
     pinned_cols = ["Ticker", "Reco", "Final_Score", "Final_Verdict"]
 
     st.dataframe(
-        report,
+        styled_report,
         width="stretch",
         hide_index=True,
         column_config={
