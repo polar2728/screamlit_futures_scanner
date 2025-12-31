@@ -177,10 +177,17 @@ else:
     mode = "ALL F&O (~200+)" if use_all_fno else "Core 24 Stocks"
     st.success(f"Scan complete – {len(report)} symbols analyzed ({mode})")
 
-    # Clean 2-decimal display
-    display_report = report.copy()
-    float_cols = display_report.select_dtypes(include=['float64', 'float32']).columns
-    display_report[float_cols] = display_report[float_cols].round(2)
+    # === CLEAN DECIMAL DISPLAY (using Styler format) ===
+    # Define precise formatting for each float column
+    format_dict = {
+        "Final_Score": "{:.2f}",
+        "RSI": "{:.1f}",
+        "ATR%": "{:.2f}",
+        "ADX": "{:.1f}",
+        "Vol_Ratio": "{:.2f}",
+        "Price": "{:.2f}",
+        # Add more if new float columns appear
+    }
 
     # Highlight high-conviction rows
     def highlight_row(row):
@@ -192,7 +199,9 @@ else:
             return ['font-weight: bold'] * len(row)
         return [''] * len(row)
 
-    styled_report = display_report.style.apply(highlight_row, axis=1)
+    styled_report = report.style \
+        .format(format_dict) \
+        .apply(highlight_row, axis=1)
 
     pinned_cols = ["Ticker", "Reco", "Final_Score", "Final_Verdict"]
 
@@ -203,7 +212,7 @@ else:
         column_config={
             col: st.column_config.Column(pinned=True)
             for col in pinned_cols
-            if col in display_report.columns
+            if col in report.columns
         }
     )
 
