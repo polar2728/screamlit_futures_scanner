@@ -2,7 +2,7 @@ import streamlit as st
 import bcrypt
 import pandas as pd
 from datetime import datetime, date
-import scanner  # Import the module itself
+import scanner
 from scanner import run_scanner
 
 # ==========================
@@ -121,9 +121,6 @@ def build_trade_thesis(row):
 st.title("📊 Donchian Breakout Daily Futures Scanner")
 st.caption("End-of-Day | Risk-Aware | Cash + Futures Conviction Engine")
 
-# ==========================
-# GENERAL PURPOSE READOUT / KEY CONCEPTS
-# ==========================
 with st.expander("📘 Scanner Key Concepts & Interpretation Guide", expanded=False):
     st.markdown("""
     **How to Read This Scanner**:
@@ -177,17 +174,19 @@ else:
     mode = "ALL F&O (~200+)" if use_all_fno else "Core 24 Stocks"
     st.success(f"Scan complete – {len(report)} symbols analyzed ({mode})")
 
-    # === CLEAN DECIMAL DISPLAY (using Styler format) ===
-    # Define precise formatting for each float column
-    format_dict = {
-        "Final_Score": "{:.2f}",
-        "RSI": "{:.1f}",
-        "ATR%": "{:.2f}",
-        "ADX": "{:.1f}",
-        "Vol_Ratio": "{:.2f}",
-        "Price": "{:.2f}",
-        # Add more if new float columns appear
-    }
+    # === DYNAMIC FORMATTING FOR ALL FLOAT COLUMNS ===
+    # Create format dict for all numeric columns
+    format_dict = {}
+    for col in report.columns:
+        if report[col].dtype in ['float64', 'float32', 'int64', 'int32']:
+            if col in ["RSI", "ADX"]:
+                format_dict[col] = "{:.1f}"
+            elif col in ["Final_Score", "ATR%", "Vol_Ratio", "Price"]:
+                format_dict[col] = "{:.2f}"
+            elif "OI_%" in col:  # Covers F1_OI_%, F2_OI_%
+                format_dict[col] = "{:.2f}"
+            elif "Close" in col or "OI_Change" in col:  # F1_Close, F2_Close, OI_Change
+                format_dict[col] = "{:.2f}" if "Close" in col else "{:,.0f}"
 
     # Highlight high-conviction rows
     def highlight_row(row):
