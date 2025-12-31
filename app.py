@@ -174,19 +174,20 @@ else:
     mode = "ALL F&O (~200+)" if use_all_fno else "Core 24 Stocks"
     st.success(f"Scan complete – {len(report)} symbols analyzed ({mode})")
 
-    # === DYNAMIC FORMATTING FOR ALL FLOAT COLUMNS ===
-    # Create format dict for all numeric columns
+    # Dynamic format dict for ALL float columns
     format_dict = {}
     for col in report.columns:
-        if report[col].dtype in ['float64', 'float32', 'int64', 'int32']:
+        if pd.api.types.is_float_dtype(report[col]):
             if col in ["RSI", "ADX"]:
                 format_dict[col] = "{:.1f}"
-            elif col in ["Final_Score", "ATR%", "Vol_Ratio", "Price"]:
+            elif "OI_%" in col:  # F1_OI_%, F2_OI_%
+                format_dict[col] = "{:.2f}%"
+            elif col in ["Final_Score", "ATR%", "Vol_Ratio"] or "Close" in col:  # F1_Close, F2_Close
                 format_dict[col] = "{:.2f}"
-            elif "OI_%" in col:  # Covers F1_OI_%, F2_OI_%
-                format_dict[col] = "{:.2f}"
-            elif "Close" in col or "OI_Change" in col:  # F1_Close, F2_Close, OI_Change
-                format_dict[col] = "{:.2f}" if "Close" in col else "{:,.0f}"
+            elif "OI_Change" in col:  # F1_OI_Change, F2_OI_Change
+                format_dict[col] = "{:,.0f}"
+            else:
+                format_dict[col] = "{:.2f}"  # Default for any other floats
 
     # Highlight high-conviction rows
     def highlight_row(row):
