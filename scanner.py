@@ -38,7 +38,7 @@ def safe_yf_download(symbol):
                     df.columns = df.columns.get_level_values(0)
                 return df.reset_index(drop=True)
         except Exception:
-            time.sleep(0.5)
+            time.sleep(0.4)
     return pd.DataFrame()
 
 # ==========================================================
@@ -241,14 +241,42 @@ def analyze_cash(name, symbol, market_regime, nifty_return):
             position = (price - range_low) / (range_high - range_low)
             range_position = "UPPER" if position > 0.75 else "MIDDLE" if position > 0.4 else "LOWER"
 
-    # === STRENGTH TIER ===
+   # === STRENGTH TIER (now symmetric for longs and shorts) ===
     strength_points = 0
-    if breakout == "LONG": strength_points += 3
-    if ha_today == "BULL" and ha_today != "DOJI": strength_points += 2
-    if compression == "YES": strength_points += 2
-    if rs_vs_nifty == "STRONG": strength_points += 2
-    if range_position == "UPPER": strength_points += 1
-    if vol_ratio > 2 and breakout != "NONE": strength_points += 1
+
+    # Breakout strength (symmetric)
+    if breakout == "LONG":
+        strength_points += 3
+    elif breakout == "SHORT":
+        strength_points += 3  # Same weight for strong downside breakout
+
+    # HA momentum (symmetric)
+    if ha_today == "BULL" and ha_today != "DOJI":
+        strength_points += 2
+    elif ha_today == "BEAR" and ha_today != "DOJI":
+        strength_points += 2
+
+    # Compression (good for both directions — coiled spring can snap either way)
+    if compression == "YES":
+        strength_points += 2
+
+    # Relative Strength (symmetric)
+    if rs_vs_nifty == "STRONG":
+        strength_points += 2  # Outperforms Nifty → strong long
+    elif rs_vs_nifty == "WEAK":
+        strength_points += 2  # Underperforms Nifty → strong short bias
+
+    # Range Position (symmetric)
+    if range_position == "UPPER":
+        strength_points += 1  # Long bias
+    elif range_position == "LOWER":
+        strength_points += 1  # Short bias
+
+    # Volume expansion on breakout day
+    if vol_ratio > 2 and breakout != "NONE":
+        strength_points += 1
+
+    # Final Tier
 
     strength_tier = "S" if strength_points >= 9 else "A" if strength_points >= 7 else "B" if strength_points >= 5 else "C"
 
@@ -258,7 +286,7 @@ def analyze_cash(name, symbol, market_regime, nifty_return):
     score += ha_contribution
     score += score_add_body
     score += consecutive_doji_penalty
-    
+
     if BONUS_VOL_RATIO and vol_ratio > 2 and breakout != "NONE":
         score += 1
     if atr_pct < MIN_ATR_PCT:
@@ -294,6 +322,7 @@ def run_scanner():
 
     # === NIFTY DATA & REGIME CALCULATED ONCE ===
     nifty_df = safe_yf_download("^NSEI")
+
     market_regime = "NEUTRAL"
     nifty_return = None
     if not nifty_df.empty:
