@@ -179,24 +179,32 @@ def analyze_cash(name, symbol, market_regime, nifty_return):
     atr = tr.rolling(14).mean().iloc[-1].item()
     doji_threshold = atr * 0.21
 
+    # === DOJ I HANDLING + CONSECUTIVE DOJ I PENALTY ===
     ha_body_today = abs(ha_close_today - ha_open_today)
-    if ha_body_today <= doji_threshold:
-        ha_today = "DOJI"
-        ha_contribution = 0
-    else:
-        ha_today = "BULL" if ha_close_today > ha_open_today else "BEAR"
-        ha_contribution = 1 if ha_today == "BULL" else -1
-
     ha_body_prev = abs(ha_close_prev - ha_open_prev)
-    if ha_body_prev <= doji_threshold:
-        prev_ha = "DOJI"
-    else:
-        prev_ha = "BULL" if ha_close_prev > ha_open_prev else "BEAR"
+    doji_threshold = atr * 0.21
+
+    is_doji_today = ha_body_today <= doji_threshold
+    is_doji_prev = ha_body_prev <= doji_threshold
+
+    # Set labels
+    ha_today = "DOJI" if is_doji_today else ("BULL" if ha_close_today > ha_open_today else "BEAR")
+    prev_ha = "DOJI" if is_doji_prev else ("BULL" if ha_close_prev > ha_open_prev else "BEAR")
+
+    # Base contribution: only if not Doji
+    ha_contribution = 0
+    if not is_doji_today:
+        ha_contribution = 1 if ha_today == "BULL" else -1
 
     # Large body bonus (only if not Doji)
     score_add_body = 0
-    if ha_body_today > atr * 0.5 and ha_today != "DOJI":
+    if ha_body_today > atr * 0.5 and not is_doji_today:
         score_add_body = 0.5 if ha_today == "BULL" else -0.5
+
+    # === CONSECUTIVE DOJ I PENALTY ===
+    consecutive_doji_penalty = 0
+    if is_doji_today and is_doji_prev:
+        consecutive_doji_penalty = -1.0  # Strong signal of weakness/chop
 
     # RSI
     delta = ha["HA_Close"].diff()
@@ -249,6 +257,8 @@ def analyze_cash(name, symbol, market_regime, nifty_return):
     score += 3 if breakout == "LONG" else -3 if breakout == "SHORT" else 0
     score += ha_contribution
     score += score_add_body
+    score += consecutive_doji_penalty
+    
     if BONUS_VOL_RATIO and vol_ratio > 2 and breakout != "NONE":
         score += 1
     if atr_pct < MIN_ATR_PCT:
