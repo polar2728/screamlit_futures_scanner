@@ -177,7 +177,7 @@ def analyze_cash(name, symbol, market_regime):
         (df["Low"] - df["Close"].shift()).abs()
     ], axis=1).max(axis=1)
     atr = tr.rolling(14).mean().iloc[-1].item()
-    doji_threshold = atr * 0.15
+    doji_threshold = atr * 0.21
 
     ha_body_today = abs(ha_close_today - ha_open_today)
     if ha_body_today <= doji_threshold:
