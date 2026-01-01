@@ -89,11 +89,26 @@ def build_trade_thesis(row):
     elif row["Breakout"] == "SHORT":
         thesis.append("Price has broken below recent 20-day low → **Donchian breakout bearish**.")
 
-    thesis.append(f"Heikin Ashi candle today is **{row['HA']}** → short-term momentum direction.")
+    # Heikin-Ashi with Doji handling
+    ha_desc = row['HA']
+    if ha_desc == "DOJI":
+        thesis.append("Heikin Ashi candle today is **DOJI** → indecision, no clear momentum.")
+    else:
+        thesis.append(f"Heikin Ashi candle today is **{ha_desc}** → short-term momentum direction.")
 
     thesis.append(
         f"Trend structure is **{row['Trend']}** with ADX = **{row['ADX']:.1f}** (higher = stronger trend)."
     )
+
+    # New Strength Columns in Thesis
+    thesis.append(f"**Relative Strength vs Nifty (3-month):** {row['RS_vs_Nifty']} → "
+                  f"{'true leadership' if row['RS_vs_Nifty']=='STRONG' else 'matching market' if row['RS_vs_Nifty']=='GOOD' else 'lagging'}")
+
+    thesis.append(f"**Price Position in 60-Day Range:** {row['Range_Position']} → "
+                  f"{'strong breakout from top' if row['Range_Position']=='UPPER' else 'middle of range' if row['Range_Position']=='MIDDLE' else 'weak low-end breakout'}")
+
+    thesis.append(f"**Overall Strength Tier:** {row['Strength_Tier']} → "
+                  f"{'Elite setup (S)' if row['Strength_Tier']=='S' else 'High conviction (A)' if row['Strength_Tier']=='A' else 'Good (B)' if row['Strength_Tier']=='B' else 'Average (C)'}")
 
     if pd.notna(row.get("F1_Signal")):
         thesis.append(f"Near-month futures: **{row['F1_Signal']}**")
@@ -106,7 +121,9 @@ def build_trade_thesis(row):
     )
 
     recommendation = (
-        "✅ **Consider long entry / Add on dips** with tight risk (especially if Compression = YES)."
+        "✅ **High-conviction long** — consider entry/add on dips (especially S/A tier)."
+        if row["Final_Verdict"] in ["STRONG BUY", "WEAK BUY"] and row["Strength_Tier"] in ["S", "A"]
+        else "✅ **Consider long entry** with tight risk."
         if row["Final_Verdict"] in ["STRONG BUY", "WEAK BUY"]
         else "⚠️ **Avoid fresh longs / Reduce exposure**"
         if row["Final_Verdict"] in ["WEAK SELL", "STRONG SELL"]
@@ -121,29 +138,45 @@ def build_trade_thesis(row):
 st.title("📊 Donchian Breakout Daily Futures Scanner")
 st.caption("End-of-Day | Risk-Aware | Cash + Futures Conviction Engine")
 
+# ==========================
+# UPDATED INSTRUCTIONAL GUIDE WITH NEW COLUMNS
+# ==========================
 with st.expander("📘 Scanner Key Concepts & Interpretation Guide", expanded=False):
     st.markdown("""
     **How to Read This Scanner**:
     - **Final Score** = Donchian breakout + Heikin-Ashi momentum + Volume bonus – Low volatility penalty
     - Higher absolute score = stronger signal
 
+    **Heikin-Ashi Candle**:
+    - BULL / BEAR = clear momentum
+    - **DOJI** = indecision (no score contribution)
+
+    **Relative Strength vs Nifty (RS_vs_Nifty)**:
+    - STRONG = stock outperformed Nifty by >20% over 3 months → true leadership
+    - GOOD = outperforming Nifty
+    - WEAK = lagging Nifty
+
+    **Range Position (60-day)**:
+    - UPPER = breakout from top 25% of range → strongest
+    - MIDDLE = middle of range
+    - LOWER = bottom 40% → weakest
+
+    **Strength Tier** (S/A/B/C):
+    - Composite rank based on breakout, HA, compression, RS, range position, volume
+    - **S-tier** = elite, highest conviction setups
+
     **ATR%** (Average True Range %):
-    - Measures daily price volatility relative to price
     - < 0.8% = low volatility (potential compression)
 
-    **ADX** (Average Directional Index):
-    - Measures trend strength
+    **ADX**:
     - > 25 = strong trend
     - < 20 = sideways
 
     **Compression = YES** 🔥:
-    - ATR% < 0.8% AND ADX < 20 → "coiled spring" setup
-    - Breakouts from compression are often explosive
+    - Low volatility + weak trend → "coiled spring" setup
 
-    **Bold rows** = Highest conviction setups:
-    - WEAK/STRONG BUY or SELL
-    - AND (Compression = YES OR ADX > 25)
-    - AND Near-month futures = Long Buildup or Short Covering
+    **Bold rows** = Highest conviction:
+    - Strong verdict + (Compression YES or ADX > 25) + Long Buildup/Short Covering in futures
     """)
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -174,20 +207,20 @@ else:
     mode = "ALL F&O (~200+)" if use_all_fno else "Core 24 Stocks"
     st.success(f"Scan complete – {len(report)} symbols analyzed ({mode})")
 
-    # Dynamic format dict for ALL float columns
+    # === DECIMAL FORMATTING (PRESERVED FROM YESTERDAY) ===
     format_dict = {}
     for col in report.columns:
         if pd.api.types.is_float_dtype(report[col]):
             if col in ["RSI", "ADX"]:
                 format_dict[col] = "{:.1f}"
-            elif "OI_%" in col:  # F1_OI_%, F2_OI_%
+            elif "OI_%" in col:
                 format_dict[col] = "{:.2f}%"
-            elif col in ["Final_Score", "ATR%", "Vol_Ratio"] or "Close" in col:  # F1_Close, F2_Close
+            elif col in ["Final_Score", "ATR%", "Vol_Ratio"] or "Close" in col:
                 format_dict[col] = "{:.2f}"
-            elif "OI_Change" in col:  # F1_OI_Change, F2_OI_Change
+            elif "OI_Change" in col:
                 format_dict[col] = "{:,.0f}"
             else:
-                format_dict[col] = "{:.2f}"  # Default for any other floats
+                format_dict[col] = "{:.2f}"
 
     # Highlight high-conviction rows
     def highlight_row(row):
