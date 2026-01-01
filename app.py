@@ -89,12 +89,7 @@ def build_trade_thesis(row):
     elif row["Breakout"] == "SHORT":
         thesis.append("Price has broken below recent 20-day low → **Donchian breakout bearish**.")
 
-    # Updated HA description with Doji handling
-    ha_desc = row['HA']
-    if ha_desc == "DOJI":
-        thesis.append("Heikin Ashi candle today is **DOJI** → indecision, no clear momentum.")
-    else:
-        thesis.append(f"Heikin Ashi candle today is **{ha_desc}** → short-term momentum direction.")
+    thesis.append(f"Heikin Ashi candle today is **{row['HA']}** → short-term momentum direction.")
 
     thesis.append(
         f"Trend structure is **{row['Trend']}** with ADX = **{row['ADX']:.1f}** (higher = stronger trend)."
@@ -105,27 +100,6 @@ def build_trade_thesis(row):
 
     if pd.notna(row.get("F2_Signal")):
         thesis.append(f"Next-month futures: **{row['F2_Signal']}**")
-
-    # === Volume Profile Guidance ===
-    vp_note = ""
-    if row["Compression"] == "YES":
-        vp_note = (
-            "📊 **Volume Profile Tip**: In compression setups, check if the breakout is above a High Volume Node (HVN) "
-            "or through a Low Volume Node (LVN) — LVN breakouts often accelerate faster."
-        )
-    elif row["ADX"] > 25:
-        vp_note = (
-            "📊 **Volume Profile Tip**: In strong trends (high ADX), look for price holding above the Point of Control (POC) "
-            "of the recent profile — confirms trend strength."
-        )
-    else:
-        vp_note = (
-            "📊 **Volume Profile Tip**: Review the 30-day Visible Range profile on TradingView. "
-            "Look for support at HVN or potential acceleration through LVN."
-        )
-
-    if vp_note:
-        thesis.append(vp_note)
 
     thesis.append(
         f"**Final Score:** {row['Final_Score']} → **{row['Final_Verdict']}**"
@@ -152,10 +126,6 @@ with st.expander("📘 Scanner Key Concepts & Interpretation Guide", expanded=Fa
     **How to Read This Scanner**:
     - **Final Score** = Donchian breakout + Heikin-Ashi momentum + Volume bonus – Low volatility penalty
     - Higher absolute score = stronger signal
-
-    **Heikin-Ashi Candle**:
-    - BULL / BEAR = clear momentum (+1 / -1 to score)
-    - **DOJI** = indecision (no score contribution)
 
     **ATR%** (Average True Range %):
     - Measures daily price volatility relative to price
@@ -204,10 +174,20 @@ else:
     mode = "ALL F&O (~200+)" if use_all_fno else "Core 24 Stocks"
     st.success(f"Scan complete – {len(report)} symbols analyzed ({mode})")
 
-    # Clean decimal display
-    display_report = report.copy()
-    float_cols = display_report.select_dtypes(include=['float64', 'float32']).columns
-    display_report[float_cols] = display_report[float_cols].round(2)
+    # Dynamic format dict for ALL float columns
+    format_dict = {}
+    for col in report.columns:
+        if pd.api.types.is_float_dtype(report[col]):
+            if col in ["RSI", "ADX"]:
+                format_dict[col] = "{:.1f}"
+            elif "OI_%" in col:  # F1_OI_%, F2_OI_%
+                format_dict[col] = "{:.2f}%"
+            elif col in ["Final_Score", "ATR%", "Vol_Ratio"] or "Close" in col:  # F1_Close, F2_Close
+                format_dict[col] = "{:.2f}"
+            elif "OI_Change" in col:  # F1_OI_Change, F2_OI_Change
+                format_dict[col] = "{:,.0f}"
+            else:
+                format_dict[col] = "{:.2f}"  # Default for any other floats
 
     # Highlight high-conviction rows
     def highlight_row(row):
@@ -219,7 +199,9 @@ else:
             return ['font-weight: bold'] * len(row)
         return [''] * len(row)
 
-    styled_report = display_report.style.apply(highlight_row, axis=1)
+    styled_report = report.style \
+        .format(format_dict) \
+        .apply(highlight_row, axis=1)
 
     pinned_cols = ["Ticker", "Reco", "Final_Score", "Final_Verdict"]
 
@@ -230,7 +212,7 @@ else:
         column_config={
             col: st.column_config.Column(pinned=True)
             for col in pinned_cols
-            if col in display_report.columns
+            if col in report.columns
         }
     )
 
