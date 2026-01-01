@@ -135,7 +135,7 @@ def build_ticker_universe():
     return symbol_map
 
 # ==========================================================
-# ANALYZE CASH (sequential, stable)
+# ANALYZE CASH (with Doji neutralization + large body bonus)
 # ==========================================================
 def analyze_cash(name, symbol, market_regime):
     df = safe_yf_download(symbol)
@@ -170,7 +170,26 @@ def analyze_cash(name, symbol, market_regime):
         return None
 
     trend = "UP" if ema20 > ema50 * 1.02 else "DOWN" if ema20 < ema50 * 0.98 else "SIDE"
-    ha_today = "BULL" if ha_close_today > ha_open_today else "BEAR"
+
+    # === DOJ I NEUTRALIZATION ===
+    # ATR for adaptive Doji threshold
+    tr = pd.concat([
+        df["High"] - df["Low"],
+        (df["High"] - df["Close"].shift()).abs(),
+        (df["Low"] - df["Close"].shift()).abs()
+    ], axis=1).max(axis=1)
+    atr = tr.rolling(14).mean().iloc[-1].item()
+
+    ha_body = abs(ha_close_today - ha_open_today)
+    doji_threshold = atr * 0.1  # Body < 10% of ATR = Doji
+
+    if ha_body < doji_threshold:
+        ha_today = "DOJI"
+        ha_contribution = 0  # No score from indecision
+    else:
+        ha_today = "BULL" if ha_close_today > ha_open_today else "BEAR"
+        ha_contribution = 1 if ha_today == "BULL" else -1
+
     prev_ha = "BULL" if ha_close_prev > ha_open_prev else "BEAR"
 
     # RSI
@@ -179,30 +198,18 @@ def analyze_cash(name, symbol, market_regime):
     loss = (-delta).clip(lower=0).rolling(14).mean()
     rsi = 100 - (100 / (1 + (gain / (loss + 1e-9)))).iloc[-1].item()
 
-    # ATR%
-    tr = pd.concat([
-        df["High"] - df["Low"],
-        (df["High"] - df["Close"].shift()).abs(),
-        (df["Low"] - df["Close"].shift()).abs()
-    ], axis=1).max(axis=1)
-    atr = tr.rolling(14).mean().iloc[-1].item()
     atr_pct = (atr / price) * 100
-
-    # ADX
     adx = talib.ADX(df["High"].values, df["Low"].values, df["Close"].values, timeperiod=14)[-1]
-
     compression = "YES" if atr_pct < 0.8 and adx < 20 else "NO"
 
-    # Volume ratio
     vol_ratio = df["Volume"].iloc[-1].item() / df["Volume"].rolling(20).mean().iloc[-1].item()
 
     # Score
     score = 0
     score += 3 if breakout == "LONG" else -3 if breakout == "SHORT" else 0
-    score += 1 if ha_today == "BULL" else -1
+    score += ha_contribution  # 0 for Doji, +1/-1 otherwise
 
-    # NEW: Large HA body contribution (+0.5 for strong momentum candle)
-    ha_body = abs(ha["HA_Close"].iloc[-1].item() - ha["HA_Open"].iloc[-1].item())
+    # Large body bonus (only on decisive candles)
     if ha_body > atr * 0.5:
         score += 0.5 if ha_today == "BULL" else -0.5
 
@@ -217,7 +224,7 @@ def analyze_cash(name, symbol, market_regime):
         "Final_Verdict": "STRONG BUY" if score >= 5 else "STRONG SELL" if score <= -5 else
                          "WEAK BUY" if score > 1 else "WEAK SELL" if score < -1 else "NEUTRAL",
         "Breakout": breakout,
-        "HA": ha_today,
+        "HA": ha_today,  # Now shows "DOJI" when applicable
         "Prev_HA": prev_ha,
         "Trend": trend,
         "RSI": round(rsi, 1),
@@ -236,7 +243,6 @@ def run_scanner():
     symbol_map = build_ticker_universe()
     print(f"🚀 Scanner started for {len(symbol_map)} symbols (single-threaded)...")
 
-    # Market regime (single Nifty download)
     nifty_df = safe_yf_download("^NSEI")
     market_regime = "NEUTRAL"
     if not nifty_df.empty:
@@ -247,7 +253,6 @@ def run_scanner():
     results = []
     total = len(symbol_map)
     for i, (name, sym) in enumerate(symbol_map.items(), 1):
-        # print(f"Processing {i}/{total}: {name}")
         result = analyze_cash(name, sym, market_regime)
         if result:
             results.append(result)
@@ -259,7 +264,7 @@ def run_scanner():
     return df.sort_values("Final_Score", ascending=False).reset_index(drop=True)
 
 # ==========================================================
-# FUTURES
+# FUTURES (unchanged)
 # ==========================================================
 def futures_signal(row):
     pc = row["ClsPric"] - row["OpnPric"]
