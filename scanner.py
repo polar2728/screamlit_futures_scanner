@@ -170,8 +170,35 @@ def analyze_cash(name, symbol, market_regime):
         return None
 
     trend = "UP" if ema20 > ema50 * 1.02 else "DOWN" if ema20 < ema50 * 0.98 else "SIDE"
-    ha_today = "BULL" if ha_close_today > ha_open_today else "BEAR"
-    prev_ha = "BULL" if ha_close_prev > ha_open_prev else "BEAR"
+    # === FULL DOJ I HANDLING ===
+    tr = pd.concat([
+        df["High"] - df["Low"],
+        (df["High"] - df["Close"].shift()).abs(),
+        (df["Low"] - df["Close"].shift()).abs()
+    ], axis=1).max(axis=1)
+    atr = tr.rolling(14).mean().iloc[-1].item()
+    doji_threshold = atr * 0.1
+
+    ha_body_today = abs(ha_close_today - ha_open_today)
+    if ha_body_today < doji_threshold:
+        ha_today = "DOJI"
+        ha_contribution = 0
+    else:
+        ha_today = "BULL" if ha_close_today > ha_open_today else "BEAR"
+        ha_contribution = 1 if ha_today == "BULL" else -1
+
+    ha_body_prev = abs(ha_close_prev - ha_open_prev)
+    if ha_body_prev < doji_threshold:
+        prev_ha = "DOJI"
+    else:
+        prev_ha = "BULL" if ha_close_prev > ha_open_prev else "BEAR"
+    # ==============================
+
+    # Large body bonus (only if not Doji)
+    if ha_body_today > atr * 0.5:
+        score_add_body = 0.5 if ha_today == "BULL" else -0.5
+    else:
+        score_add_body = 0
 
     # RSI
     delta = ha["HA_Close"].diff()
@@ -202,9 +229,12 @@ def analyze_cash(name, symbol, market_regime):
     score += 1 if ha_today == "BULL" else -1
 
     # NEW: Large HA body contribution (+0.5 for strong momentum candle)
-    ha_body = abs(ha["HA_Close"].iloc[-1].item() - ha["HA_Open"].iloc[-1].item())
-    if ha_body > atr * 0.5:
-        score += 0.5 if ha_today == "BULL" else -0.5
+    # ha_body = abs(ha["HA_Close"].iloc[-1].item() - ha["HA_Open"].iloc[-1].item())
+    # if ha_body > atr * 0.5:
+    #     score += 0.5 if ha_today == "BULL" else -0.5
+
+    score += ha_contribution
+    score += score_add_body  # Large body bonus
 
     if BONUS_VOL_RATIO and vol_ratio > 2 and breakout != "NONE":
         score += 1
