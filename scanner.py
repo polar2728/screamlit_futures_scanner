@@ -180,7 +180,7 @@ def analyze_cash(name, symbol, market_regime):
     doji_threshold = atr * 0.1
 
     ha_body_today = abs(ha_close_today - ha_open_today)
-    if ha_body_today < doji_threshold:
+    if ha_body_today <= doji_threshold:
         ha_today = "DOJI"
         ha_contribution = 0
     else:
@@ -188,7 +188,7 @@ def analyze_cash(name, symbol, market_regime):
         ha_contribution = 1 if ha_today == "BULL" else -1
 
     ha_body_prev = abs(ha_close_prev - ha_open_prev)
-    if ha_body_prev < doji_threshold:
+    if ha_body_prev <= doji_threshold:
         prev_ha = "DOJI"
     else:
         prev_ha = "BULL" if ha_close_prev > ha_open_prev else "BEAR"
