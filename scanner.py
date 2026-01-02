@@ -308,35 +308,36 @@ def add_futures_scoring(df):
 
     def score_fut_signal(signal):
         scores = {
-            "Long Buildup": 2.0,
-            "Short Covering": 1.5,
-            "Long Unwinding": -1.5,
-            "Short Buildup": -2.0,
+            "Long Buildup": 2.5,    # Stronger bullish
+            "Short Covering": 2.0,
+            "Long Unwinding": -2.0,
+            "Short Buildup": -2.5,  # Stronger bearish
         }
         return scores.get(signal, 0)
 
     mask = df["F1_Signal"].notna()
-    fut_contribution[mask] = df.loc[mask, "F1_Signal"].apply(score_fut_signal) * 0.6
+    fut_contribution[mask] = df.loc[mask, "F1_Signal"].apply(score_fut_signal) * 0.7  # F1 = 70%
 
-    oi_bonus = np.where(
-        df["F1_OI_%"].fillna(0) > 20, 1.0,
-        np.where(df["F1_OI_%"].fillna(0) < -20, -1.0, 0)
-    )
-    fut_contribution += pd.Series(oi_bonus) * 0.25
+    oi_bonus = np.where(df["F1_OI_%"].fillna(0) > 20, 1.0,
+                        np.where(df["F1_OI_%"].fillna(0) < -20, -1.0, 0))
+    fut_contribution += pd.Series(oi_bonus) * 0.3  # OI = 30%
 
     if "F2_Signal" in df.columns:
         mask_f2 = df["F2_Signal"].notna()
-        fut_contribution[mask_f2] += df.loc[mask_f2, "F2_Signal"].apply(score_fut_signal) * 0.15
+        fut_contribution[mask_f2] += df.loc[mask_f2, "F2_Signal"].apply(score_fut_signal) * 0.15  # F2 = 15%
 
-    cash_bull = df["Final_Verdict"].isin(["STRONG BUY", "WEAK BUY"])
-    fut_bear_signals = df["F1_Signal"].fillna("").isin(["Short Buildup", "Long Unwinding"])
-    divergence_penalty = np.where(cash_bull == fut_bear_signals, 0, -1.0)
-    fut_contribution += pd.Series(divergence_penalty)
+    # Divergence penalty
+    cash_bull = df["Final_Score"] > 0  # Use score, not verdict (more accurate)
+    fut_bull_signals = df["F1_Signal"].fillna("").isin(["Long Buildup", "Short Covering"])
+    alignment_bonus = np.where(cash_bull == fut_bull_signals, 0.5, 0)
+    fut_contribution += pd.Series(alignment_bonus)
 
-    futures_weight = fut_contribution * 0.25
+    # Apply with higher weight
+    futures_weight = fut_contribution * 0.5  # Now 50% influence
     df["Futures_Score"] = futures_weight.round(2)
     df["Final_Score"] += futures_weight
 
+    # Re-evaluate verdict
     conditions = [
         df["Final_Score"] >= 6,
         df["Final_Score"] <= -6,
