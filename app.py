@@ -63,8 +63,8 @@ def build_trade_thesis(row):
     thesis = []
 
     thesis.append(
-        f"**Market Regime:** {row['Market_Regime']} — "
-        f"{'supports' if row['Market_Regime']=='RISK_ON' else 'does not favor'} long trades."
+        f"**Market Regime:** {row['Regime']} — "
+        f"{'supports' if row['Regime']=='RISK_ON' else 'does not favor'} long trades."
     )
 
     if row["Breakout"] == "LONG":
@@ -78,7 +78,7 @@ def build_trade_thesis(row):
     else:
         thesis.append(f"Heikin Ashi today: **{ha_desc}** → momentum.")
 
-    if row.get("Futures_Score", 0) != 0:
+    if row.get("Futures_Score", 0) > 0.5:
         thesis.append("**Reversal pattern** detected (strong candle after Doji/opposite).")
 
     thesis.append(f"Trend: **{row['Trend']}** | ADX: **{row['ADX']:.1f}**")
@@ -87,16 +87,16 @@ def build_trade_thesis(row):
         thesis.append(f"**Futures:** {row['F1_Signal']} (adds to score)")
 
     thesis.append(
-        f"**Conviction (ST):** {row['ST']} | Score: {row['Final_Score']} → **{row['Final_Verdict']}**"
+        f"**Conviction (ST):** {row['ST']} | Score: {row['Score']:.1f} → **{row['Verdict']}**"
     )
 
     recommendation = (
         "✅ **High-conviction** — consider entry (ST = Elite/High + futures support)."
-        if row["Final_Verdict"] in ["STRONG BUY", "WEAK BUY"] and row["ST"] in ["Elite", "High"]
+        if row["Verdict"] in ["STRONG BUY", "WEAK BUY"] and row["ST"] in ["Elite", "High"]
         else "✅ **Consider entry** with tight risk."
-        if row["Final_Verdict"] in ["STRONG BUY", "WEAK BUY"]
+        if row["Verdict"] in ["STRONG BUY", "WEAK BUY"]
         else "⚠️ **Avoid / Reduce**"
-        if row["Final_Verdict"] in ["WEAK SELL", "STRONG SELL"]
+        if row["Verdict"] in ["WEAK SELL", "STRONG SELL"]
         else "⏸️ **Wait for confirmation**"
     )
 
@@ -114,27 +114,27 @@ st.caption("Early reversal detection • Futures confirmation • Conviction ran
 with st.expander("📘 Interpretation Guide", expanded=False):
     st.markdown("""
     **Core Logic**:
-    - **Score** = Breakout + HA momentum + Reversal bonus + Compression + Volume + Futures
-    - **STRONG BUY** ≥6 | **WEAK BUY** >2 (higher = stronger)
+    - **Score** = Breakout + HA momentum + Reversal bonus + Comp + Volume + Futures
+    - **STRONG BUY** ≥6 | **WEAK BUY** >2
 
-    **New Features**:
-    - **Reversal Bonus**: +1.5 if strong candle follows Doji or opposite candle → early reversal flag
-    - **Futures Confirmation**: Long Buildup/Short Covering adds ~1–1.5 to score
-    - **Comp = YES** → coiled spring (high probability breakout)
+    **Key Features**:
+    - **Reversal Bonus**: +1.5 if strong candle follows Doji or opposite → early reversal
+    - **Futures Confirmation**: Long Buildup adds ~1–1.5 → smart money alignment
+    - **Comp = YES** → coiled spring (high-probability breakout)
 
     **Conviction (ST)**:
-    - **Elite** = top-tier setup (rare, highest probability)
-    - **High** = strong conviction
-    - **Good** = solid
-    - **Avg** = average
+    - **Elite** — top-tier (rare, highest probability)
+    - **High** — strong conviction
+    - **Good** — solid
+    - **Avg** — average
 
     **Focus on**:
     - Elite/High ST
-    - Futures = Long Buildup
+    - F1_Signal = Long Buildup
     - Comp = YES
-    - Reversal pattern + high volume
+    - Reversal + high volume
 
-    Bold rows = highest conviction (strong verdict + futures + compression/trend).
+    Bold rows = highest conviction setups.
     """)
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -163,7 +163,7 @@ else:
     mode = "ALL F&O (~200+)" if use_all_fno else "Core Stocks"
     st.success(f"Scan complete — {len(report)} symbols ({mode})")
 
-    # Rename for space
+    # Rename & map for space and clarity
     report = report.rename(columns={
         "Strength_Tier": "ST",
         "Compression": "Comp",
@@ -172,20 +172,23 @@ else:
         "Market_Regime": "Regime"
     })
 
-    # Map ST values for readability
     st_map = {"S": "Elite", "A": "High", "B": "Good", "C": "Avg"}
     report["ST"] = report["ST"].map(st_map)
 
-    # Decimal formatting (concise)
-    format_dict = {
-        "Score": "{:.1f}",
-        "RSI": "{:.0f}",
-        "ATR%": "{:.2f}",
-        "Vol_Ratio": "{:.1f}",
-        "ADX": "{:.0f}",
-        "Price": "{:,.0f}",
-        "Futures_Score": "{:.1f}",
-    }
+    # Formatting (fixed OI% decimals)
+    format_dict = {}
+    for col in report.columns:
+        if pd.api.types.is_float_dtype(report[col]):
+            if col in ["RSI", "ADX"]:
+                format_dict[col] = "{:.1f}"
+            elif "OI_%" in col:  # F1_OI_%, F2_OI_%
+                format_dict[col] = "{:.2f}"
+            elif col in ["Score", "ATR%", "Vol_Ratio", "Futures_Score"] or "Close" in col:
+                format_dict[col] = "{:.2f}"
+            elif "OI_Change" in col:
+                format_dict[col] = "{:,.0f}"
+            else:
+                format_dict[col] = "{:.2f}"
 
     def highlight_row(row):
         is_signal = row["Verdict"] in ["STRONG BUY", "WEAK BUY", "STRONG SELL", "WEAK SELL"]
@@ -198,7 +201,7 @@ else:
 
     styled = report.style.format(format_dict).apply(highlight_row, axis=1)
 
-    # Pinned + space-saving columns
+    # Pinned essential columns
     pinned = ["Ticker", "Verdict", "Score", "ST", "Breakout", "HA", "Comp"]
 
     st.dataframe(
