@@ -15,8 +15,8 @@ LOOKBACK_DAYS = "9mo"
 MAX_RETRIES = 3
 MIN_ATR_PCT = 0.6
 INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY"}
-USE_ALL_FNO = True
-BONUS_VOL_RATIO = True  # +1 if Vol_Ratio > 2 on breakout day
+USE_ALL_FNO = False
+BONUS_VOL_RATIO = True
 
 CORE_TICKERS = [
     "NIFTY", "BANKNIFTY", "RELIANCE", "HDFCBANK", "ICICIBANK", "AXISBANK", "SBIN",
@@ -135,7 +135,7 @@ def build_ticker_universe():
     return symbol_map
 
 # ==========================================================
-# ANALYZE CASH (with top 3 strength enhancements)
+# ANALYZE CASH (vol_ratio moved up to fix UnboundLocalError)
 # ==========================================================
 def analyze_cash(name, symbol, market_regime, nifty_return):
     df = safe_yf_download(symbol)
@@ -170,7 +170,7 @@ def analyze_cash(name, symbol, market_regime, nifty_return):
 
     trend = "UP" if ema20 > ema50 * 1.02 else "DOWN" if ema20 < ema50 * 0.98 else "SIDE"
 
-    # === FULL DOJI HANDLING ===
+    # === DOJI & REVERSAL DETECTION ===
     tr = pd.concat([
         df["High"] - df["Low"],
         (df["High"] - df["Close"].shift()).abs(),
@@ -179,34 +179,30 @@ def analyze_cash(name, symbol, market_regime, nifty_return):
     atr = tr.rolling(14).mean().iloc[-1].item()
     doji_threshold = atr * 0.21
 
-    # === DOJ I HANDLING + CONSECUTIVE DOJ I PENALTY ===
     ha_body_today = abs(ha_close_today - ha_open_today)
     ha_body_prev = abs(ha_close_prev - ha_open_prev)
-    doji_threshold = atr * 0.21
 
     is_doji_today = ha_body_today <= doji_threshold
     is_doji_prev = ha_body_prev <= doji_threshold
 
-    # Set labels
+    # Labels
     ha_today = "DOJI" if is_doji_today else ("BULL" if ha_close_today > ha_open_today else "BEAR")
     prev_ha = "DOJI" if is_doji_prev else ("BULL" if ha_close_prev > ha_open_prev else "BEAR")
 
-    # Base contribution: only if not Doji
+    # Base HA contribution
     ha_contribution = 0
     if not is_doji_today:
         ha_contribution = 1 if ha_today == "BULL" else -1
 
-    # Large body bonus (only if not Doji)
+    # Large body bonus
     score_add_body = 0
     if ha_body_today > atr * 0.5 and not is_doji_today:
         score_add_body = 0.5 if ha_today == "BULL" else -0.5
 
-    # === CONSECUTIVE DOJ I PENALTY ===
-    consecutive_doji_penalty = 0
-    if is_doji_today and is_doji_prev:
-        consecutive_doji_penalty = -1.0  # Strong signal of weakness/chop
+    # Consecutive Doji penalty
+    consecutive_doji_penalty = -1.0 if is_doji_today and is_doji_prev else 0
 
-    # RSI
+    # === RSI, ATR%, ADX, Compression ===
     delta = ha["HA_Close"].diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta).clip(lower=0).rolling(14).mean()
@@ -216,9 +212,22 @@ def analyze_cash(name, symbol, market_regime, nifty_return):
     adx = talib.ADX(df["High"].values, df["Low"].values, df["Close"].values, timeperiod=14)[-1]
     compression = "YES" if atr_pct < 0.8 and adx < 20 else "NO"
 
-    vol_ratio = df["Volume"].iloc[-1].item() / df["Volume"].rolling(20).mean().iloc[-1].item()
+    # === VOL_RATIO (moved up — now available for reversal_vol_bonus) ===
+    vol_mean = df["Volume"].rolling(20).mean().iloc[-1].item()
+    vol_ratio = df["Volume"].iloc[-1].item() / vol_mean if vol_mean > 0 else 0
 
-    # === RELATIVE STRENGTH VS NIFTY (using pre-calculated nifty_return) ===
+    # === REVERSAL CANDLE BONUS ===
+    reversal_bonus = 0
+    is_reversal_day = False
+    if not is_doji_today and ha_body_today > atr * 0.5:
+        prev_is_opposite = (prev_ha == "BEAR" and ha_today == "BULL") or (prev_ha == "BULL" and ha_today == "BEAR")
+        if is_doji_prev or prev_is_opposite:
+            reversal_bonus = 1.5
+            is_reversal_day = True
+
+    reversal_vol_bonus = 1.0 if is_reversal_day and vol_ratio > 2 else 0
+
+    # === RELATIVE STRENGTH, RANGE POSITION, STRENGTH TIER ===
     rs_vs_nifty = "N/A"
     if len(df) > 60 and nifty_return is not None:
         try:
@@ -232,7 +241,6 @@ def analyze_cash(name, symbol, market_regime, nifty_return):
         except:
             rs_vs_nifty = "N/A"
 
-    # === RANGE POSITION ===
     range_position = "N/A"
     if len(df) >= 60:
         range_high = df["High"].rolling(60).max().iloc[-1]
@@ -241,52 +249,31 @@ def analyze_cash(name, symbol, market_regime, nifty_return):
             position = (price - range_low) / (range_high - range_low)
             range_position = "UPPER" if position > 0.75 else "MIDDLE" if position > 0.4 else "LOWER"
 
-   # === STRENGTH TIER (now symmetric for longs and shorts) ===
     strength_points = 0
-
-    # Breakout strength (symmetric)
-    if breakout == "LONG":
-        strength_points += 3
-    elif breakout == "SHORT":
-        strength_points += 3  # Same weight for strong downside breakout
-
-    # HA momentum (symmetric)
-    if ha_today == "BULL" and ha_today != "DOJI":
-        strength_points += 2
-    elif ha_today == "BEAR" and ha_today != "DOJI":
-        strength_points += 2
-
-    # Compression (good for both directions — coiled spring can snap either way)
-    if compression == "YES":
-        strength_points += 2
-
-    # Relative Strength (symmetric)
-    if rs_vs_nifty == "STRONG":
-        strength_points += 2  # Outperforms Nifty → strong long
-    elif rs_vs_nifty == "WEAK":
-        strength_points += 2  # Underperforms Nifty → strong short bias
-
-    # Range Position (symmetric)
-    if range_position == "UPPER":
-        strength_points += 1  # Long bias
-    elif range_position == "LOWER":
-        strength_points += 1  # Short bias
-
-    # Volume expansion on breakout day
-    if vol_ratio > 2 and breakout != "NONE":
-        strength_points += 1
-
-    # Final Tier
+    if breakout == "LONG": strength_points += 3
+    elif breakout == "SHORT": strength_points += 3
+    if ha_today == "BULL" and ha_today != "DOJI": strength_points += 2
+    elif ha_today == "BEAR" and ha_today != "DOJI": strength_points += 2
+    if compression == "YES": strength_points += 2
+    if rs_vs_nifty == "STRONG": strength_points += 2
+    elif rs_vs_nifty == "WEAK": strength_points += 2
+    if range_position in ("UPPER", "LOWER"): strength_points += 1
+    if vol_ratio > 2 and breakout != "NONE": strength_points += 1
+    if reversal_bonus > 0: strength_points += 1.5
+    if reversal_vol_bonus > 0: strength_points += 1
 
     strength_tier = "S" if strength_points >= 9 else "A" if strength_points >= 7 else "B" if strength_points >= 5 else "C"
 
-    # Score (existing)
+    # Final Score
     score = 0
     score += 3 if breakout == "LONG" else -3 if breakout == "SHORT" else 0
     score += ha_contribution
     score += score_add_body
     score += consecutive_doji_penalty
-
+    score += reversal_bonus
+    score += reversal_vol_bonus
+    if compression == "YES" and breakout != "NONE":
+        score += 1
     if BONUS_VOL_RATIO and vol_ratio > 2 and breakout != "NONE":
         score += 1
     if atr_pct < MIN_ATR_PCT:
@@ -295,8 +282,8 @@ def analyze_cash(name, symbol, market_regime, nifty_return):
     return {
         "Ticker": name,
         "Final_Score": round(score, 2),
-        "Final_Verdict": "STRONG BUY" if score >= 5 else "STRONG SELL" if score <= -5 else
-                         "WEAK BUY" if score > 1 else "WEAK SELL" if score < -1 else "NEUTRAL",
+        "Final_Verdict": "STRONG BUY" if score >= 6 else "STRONG SELL" if score <= -6 else
+                         "WEAK BUY" if score > 2 else "WEAK SELL" if score < -2 else "NEUTRAL",
         "Breakout": breakout,
         "HA": ha_today,
         "Prev_HA": prev_ha,
@@ -304,54 +291,65 @@ def analyze_cash(name, symbol, market_regime, nifty_return):
         "RSI": round(rsi, 1),
         "ATR%": round(atr_pct, 2),
         "Compression": compression,
-        "ADX": round(adx, 1),
+        "ADX": round(float(adx), 1),
         "Vol_Ratio": round(vol_ratio, 2),
         "Price": round(price, 2),
         "Market_Regime": market_regime,
         "RS_vs_Nifty": rs_vs_nifty,
         "Range_Position": range_position,
-        "Strength_Tier": strength_tier
+        "Strength_Tier": strength_tier,
     }
 
 # ==========================================================
-# RUN SCANNER (Nifty fetched ONCE)
+# FUTURES SCORING
 # ==========================================================
-def run_scanner():
-    symbol_map = build_ticker_universe()
-    print(f"🚀 Scanner started for {len(symbol_map)} symbols (single-threaded)...")
+def add_futures_scoring(df):
+    fut_contribution = pd.Series(0.0, index=df.index)
 
-    # === NIFTY DATA & REGIME CALCULATED ONCE ===
-    nifty_df = safe_yf_download("^NSEI")
+    def score_fut_signal(signal):
+        scores = {
+            "Long Buildup": 2.0,
+            "Short Covering": 1.5,
+            "Long Unwinding": -1.5,
+            "Short Buildup": -2.0,
+        }
+        return scores.get(signal, 0)
 
-    market_regime = "NEUTRAL"
-    nifty_return = None
-    if not nifty_df.empty:
-        try:
-            ema20 = nifty_df["Close"].ewm(span=20, adjust=False).mean().iloc[-1].item()
-            ema50 = nifty_df["Close"].ewm(span=50, adjust=False).mean().iloc[-1].item()
-            market_regime = "RISK_ON" if ema20 > ema50 else "RISK_OFF"
+    mask = df["F1_Signal"].notna()
+    fut_contribution[mask] = df.loc[mask, "F1_Signal"].apply(score_fut_signal) * 0.6
 
-            if len(nifty_df) > 60:
-                nifty_return = (nifty_df["Close"].iloc[-1] / nifty_df["Close"].iloc[-60]) - 1
-        except:
-            pass
-    print(f"📊 Market Regime: {market_regime}")
+    oi_bonus = np.where(
+        df["F1_OI_%"].fillna(0) > 20, 1.0,
+        np.where(df["F1_OI_%"].fillna(0) < -20, -1.0, 0)
+    )
+    fut_contribution += pd.Series(oi_bonus) * 0.25
 
-    results = []
-    total = len(symbol_map)
-    for i, (name, sym) in enumerate(symbol_map.items(), 1):
-        result = analyze_cash(name, sym, market_regime, nifty_return)
-        if result:
-            results.append(result)
+    if "F2_Signal" in df.columns:
+        mask_f2 = df["F2_Signal"].notna()
+        fut_contribution[mask_f2] += df.loc[mask_f2, "F2_Signal"].apply(score_fut_signal) * 0.15
 
-    cash_df = pd.DataFrame(results)
-    fut_df = run_futures(list(symbol_map.keys()))
+    cash_bull = df["Final_Verdict"].isin(["STRONG BUY", "WEAK BUY"])
+    fut_bear_signals = df["F1_Signal"].fillna("").isin(["Short Buildup", "Long Unwinding"])
+    divergence_penalty = np.where(cash_bull == fut_bear_signals, 0, -1.0)
+    fut_contribution += pd.Series(divergence_penalty)
 
-    df = cash_df.merge(fut_df, on="Ticker", how="left")
-    return df.sort_values("Final_Score", ascending=False).reset_index(drop=True)
+    futures_weight = fut_contribution * 0.25
+    df["Futures_Score"] = futures_weight.round(2)
+    df["Final_Score"] += futures_weight
+
+    conditions = [
+        df["Final_Score"] >= 6,
+        df["Final_Score"] <= -6,
+        df["Final_Score"] > 2,
+        df["Final_Score"] < -2,
+    ]
+    choices = ["STRONG BUY", "STRONG SELL", "WEAK BUY", "WEAK SELL"]
+    df["Final_Verdict"] = np.select(conditions, choices, default="NEUTRAL")
+
+    return df
 
 # ==========================================================
-# FUTURES (unchanged)
+# FUTURES
 # ==========================================================
 def futures_signal(row):
     pc = row["ClsPric"] - row["OpnPric"]
@@ -383,6 +381,43 @@ def run_futures(tickers):
             })
         out.append(row)
     return pd.DataFrame(out)
+
+# ==========================================================
+# RUN SCANNER
+# ==========================================================
+def run_scanner():
+    symbol_map = build_ticker_universe()
+    print(f"🚀 Scanner started for {len(symbol_map)} symbols...")
+
+    nifty_df = safe_yf_download("^NSEI")
+    market_regime = "NEUTRAL"
+    nifty_return = None
+    if not nifty_df.empty:
+        try:
+            ema20 = nifty_df["Close"].ewm(span=20, adjust=False).mean().iloc[-1].item()
+            ema50 = nifty_df["Close"].ewm(span=50, adjust=False).mean().iloc[-1].item()
+            market_regime = "RISK_ON" if ema20 > ema50 else "RISK_OFF"
+            if len(nifty_df) > 60:
+                nifty_return = (nifty_df["Close"].iloc[-1] / nifty_df["Close"].iloc[-60]) - 1
+        except:
+            pass
+    else:
+        print("⚠️ Nifty data unavailable — using NEUTRAL regime")
+    print(f"📊 Market Regime: {market_regime}")
+
+    results = []
+    for name, sym in symbol_map.items():
+        result = analyze_cash(name, sym, market_regime, nifty_return)
+        if result:
+            results.append(result)
+
+    cash_df = pd.DataFrame(results)
+    fut_df = run_futures(list(symbol_map.keys()))
+    df = cash_df.merge(fut_df, on="Ticker", how="left")
+
+    df = add_futures_scoring(df)
+
+    return df.sort_values("Final_Score", ascending=False).reset_index(drop=True)
 
 # ==========================================================
 # MAIN
