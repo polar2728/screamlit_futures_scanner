@@ -50,7 +50,7 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("### Scanner Controls")
-    use_all_fno = st.checkbox("Scan ALL F&O (~200+)", value=True)
+    use_all_fno = st.checkbox("Scan ALL F&O (~200+)", value=False)
     auto_refresh = st.checkbox("Auto-refresh every 5 min", value=False)
     st.markdown("### Last Run")
     if "last_run" in st.session_state:
@@ -113,28 +113,45 @@ st.caption("Early reversal detection • Futures confirmation • Conviction ran
 # ==========================
 with st.expander("📘 Interpretation Guide", expanded=False):
     st.markdown("""
-    **Core Logic**:
-    - **Score** = Breakout + HA momentum + Reversal bonus + Comp + Volume + Futures
-    - **STRONG BUY** ≥6 | **WEAK BUY** >2
+        **How to Read This Scanner**:
+        - **Score** = Breakout + HA momentum + Reversal bonus + Comp + Volume + Futures
+        - **STRONG BUY** ≥6 | **WEAK BUY** >2
 
-    **Key Features**:
-    - **Reversal Bonus**: +1.5 if strong candle follows Doji or opposite → early reversal
-    - **Futures Confirmation**: Long Buildup adds ~1–1.5 → smart money alignment
-    - **Comp = YES** → coiled spring (high-probability breakout)
+        **Key Features**:
+        - Donchain Channel Breakout
+        - Heikin Ashi BULL / BEAR = clear momentum And **DOJI** = indecision 
+        - Reversal Bonus: +1.5 if strong candle follows Doji or opposite → early reversal
+        - Futures Confirmation: Long Buildup adds ~1–1.5 → smart money alignment
+        - Comp = YES → coiled spring (high-probability breakout)
 
-    **Conviction (ST)**:
-    - **Elite** — top-tier (rare, highest probability)
-    - **High** — strong conviction
-    - **Good** — solid
-    - **Avg** — average
+        **Relative Strength vs Nifty (RS_vs_Nifty)**:
+        - STRONG = stock outperformed Nifty by >20% over 3 months → true leadership
+        - GOOD = outperforming Nifty
+        - WEAK = lagging Nifty
 
-    **Focus on**:
-    - Elite/High ST
-    - F1_Signal = Long Buildup
-    - Comp = YES
-    - Reversal + high volume
+        **Range Position (60-day)**:
+        - UPPER = breakout from top 25% of range → strongest
+        - MIDDLE = middle of range
+        - LOWER = bottom 40% → weakest
 
-    Bold rows = highest conviction setups.
+        **Strength Tier** (S/A/B/C):
+        - Composite rank based on breakout, HA, compression, RS, range position, volume
+        - **Elite** — top-tier (rare, highest probability)
+        - **High** — strong conviction
+        - **Good** — solid
+        - **Avg** — average
+
+        **ATR%** (Average True Range %):
+        - < 0.8% = low volatility (potential compression)
+
+        **ADX**:
+        - > 25 = strong trend and < 20 = sideways
+
+        **Compression = YES** 🔥:
+        - Low volatility + weak trend → "coiled spring" setup
+
+        **Bold rows** = Highest conviction:
+        - Strong verdict + (Compression YES or ADX > 25) + Long Buildup/Short Covering in futures
     """)
 
 @st.cache_data(ttl=3600, show_spinner=False)
