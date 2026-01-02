@@ -285,8 +285,8 @@ def analyze_cash(name, symbol, market_regime, nifty_return):
         "Final_Verdict": "STRONG BUY" if score >= 6 else "STRONG SELL" if score <= -6 else
                          "WEAK BUY" if score > 2 else "WEAK SELL" if score < -2 else "NEUTRAL",
         "Breakout": breakout,
-        "HA": ha_today,
         "Prev_HA": prev_ha,
+        "HA": ha_today,
         "Trend": trend,
         "RSI": round(rsi, 1),
         "ATR%": round(atr_pct, 2),

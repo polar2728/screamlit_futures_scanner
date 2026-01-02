@@ -219,7 +219,7 @@ else:
     styled = report.style.format(format_dict).apply(highlight_row, axis=1)
 
     # Pinned essential columns
-    pinned = ["Ticker", "Verdict", "Score", "ST", "Breakout", "HA", "Comp"]
+    pinned = ["Ticker", "Verdict", "Score", "ST", "Breakout", "Comp"]
 
     st.dataframe(
         styled,
