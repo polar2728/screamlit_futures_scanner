@@ -223,7 +223,7 @@ def build_trade_thesis(row):
     )
 
     return "\n\n".join(thesis), recommendation
-    
+
 # ==========================
 # DISPLAY RESULTS
 # ==========================
@@ -249,13 +249,6 @@ else:
     display_df = report.copy()
     if search_term:
         display_df = display_df[display_df["Ticker"].str.contains(search_term.upper(), case=False)]
-
-    # Metrics (now safe — uses renamed columns)
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Symbols", len(report))
-    col2.metric("STRONG BUY", (report["Score"] >= 6).sum())
-    col3.metric("Elite ST", (report["ST"] == "Elite").sum())
-    col4.metric("Comp = YES", (report["Comp"] == "YES").sum())
 
     # Formatting
     format_dict = {}
@@ -290,6 +283,13 @@ else:
         hide_index=True,
         column_config={c: st.column_config.Column(pinned=True) for c in pinned if c in display_df.columns}
     )
+
+    # Metrics (now safe — uses renamed columns)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Symbols", len(report))
+    col2.metric("STRONG BUY", (report["Score"] >= 6).sum())
+    col3.metric("Elite ST", (report["ST"] == "Elite").sum())
+    col4.metric("Comp = YES", (report["Comp"] == "YES").sum())
 
     # Explainer
     st.markdown("---")
