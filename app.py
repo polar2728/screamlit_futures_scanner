@@ -186,29 +186,30 @@ if report.empty:
 else:
     mode = "ALL F&O (~200+)" if use_all_fno else "Core Stocks"
 
-    # Search bar
-    search_term = st.text_input("🔍 Search Ticker", "")
-    display_df = report.copy()
-    if search_term:
-        display_df = display_df[display_df["Ticker"].str.contains(search_term.upper(), case=False)]
-
-    # Rename & map (moved BEFORE metrics)
-    display_df = display_df.rename(columns={
+    # === MOVE RENAMING HERE (before metrics) ===
+    report = report.rename(columns={
         "Strength_Tier": "ST",
         "Compression": "Comp",
         "Final_Score": "Score",
         "Final_Verdict": "Verdict",
         "Market_Regime": "Regime"
     })
-    st_map = {"S": "Elite", "A": "High", "B": "Good", "C": "Avg"}
-    display_df["ST"] = display_df["ST"].map(st_map)
 
-    # Metrics (now using renamed columns)
+    st_map = {"S": "Elite", "A": "High", "B": "Good", "C": "Avg"}
+    report["ST"] = report["ST"].map(st_map)
+
+    # Search bar
+    search_term = st.text_input("🔍 Search Ticker", "")
+    display_df = report.copy()
+    if search_term:
+        display_df = display_df[display_df["Ticker"].str.contains(search_term.upper(), case=False)]
+
+    # Metrics (now safe — uses renamed columns)
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Symbols", len(report))
-    col2.metric("STRONG BUY", (report["Final_Score"] >= 6).sum())
-    col3.metric("Elite ST", (report["ST"].map({"Elite": "S", "High": "A", "Good": "B", "Avg": "C"}) == "S").sum())
-    col4.metric("Comp = YES", (report["Compression"] == "YES").sum())
+    col2.metric("STRONG BUY", (report["Score"] >= 6).sum())
+    col3.metric("Elite ST", (report["ST"] == "Elite").sum())
+    col4.metric("Comp = YES", (report["Comp"] == "YES").sum())
 
     # Formatting
     format_dict = {}
