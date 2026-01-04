@@ -2,8 +2,9 @@ import streamlit as st
 import bcrypt
 import pandas as pd
 from datetime import datetime, date
+import time
 import scanner
-from scanner import run_scanner
+from scanner import run_scanner, run_futures  # Import run_futures for caching
 
 # ==========================
 # PAGE CONFIG
@@ -57,50 +58,47 @@ with st.sidebar:
         st.caption(st.session_state.last_run)
 
 # ==========================
-# HELPERS
+# CACHED FUTURES (24h cache)
 # ==========================
-def build_trade_thesis(row):
-    thesis = []
+@st.cache_data(ttl=86400, show_spinner=False)
+def cached_run_futures(_tickers):
+    return run_futures(_tickers)
 
-    thesis.append(
-        f"**Market Regime:** {row['Regime']} — "
-        f"{'supports' if row['Regime']=='RISK_ON' else 'does not favor'} long trades."
-    )
+# ==========================
+# OPTIMIZED SCANNER (uses cached futures)
+# ==========================
+@st.cache_data(ttl=3600, show_spinner=False)
+def run_scanner_optimized(_use_all_fno: bool):
+    scanner.USE_ALL_FNO = _use_all_fno
+    symbol_map = scanner.build_ticker_universe()
 
-    if row["Breakout"] == "LONG":
-        thesis.append("**Donchian breakout bullish** (above 20-day high).")
-    elif row["Breakout"] == "SHORT":
-        thesis.append("**Donchian breakout bearish** (below 20-day low).")
+    nifty_df = scanner.safe_yf_download("^NSEI")
+    market_regime = "NEUTRAL"
+    nifty_return = None
+    if not nifty_df.empty:
+        try:
+            ema20 = nifty_df["Close"].ewm(span=20, adjust=False).mean().iloc[-1].item()
+            ema50 = nifty_df["Close"].ewm(span=50, adjust=False).mean().iloc[-1].item()
+            market_regime = "RISK_ON" if ema20 > ema50 else "RISK_OFF"
+            if len(nifty_df) > 60:
+                nifty_return = (nifty_df["Close"].iloc[-1] / nifty_df["Close"].iloc[-60]) - 1
+        except:
+            pass
 
-    ha_desc = row['HA']
-    if ha_desc == "DOJI":
-        thesis.append("Heikin Ashi today: **DOJI** → indecision.")
-    else:
-        thesis.append(f"Heikin Ashi today: **{ha_desc}** → momentum.")
+    results = []
+    for name, sym in symbol_map.items():
+        result = scanner.analyze_cash(name, sym, market_regime, nifty_return)
+        if result:
+            results.append(result)
 
-    if row.get("Futures_Score", 0) > 0.5:
-        thesis.append("**Reversal pattern** detected (strong candle after Doji/opposite).")
+    cash_df = pd.DataFrame(results)
+    tickers_list = list(symbol_map.keys())
+    fut_df = cached_run_futures(tickers_list)  # Cached futures
+    df = cash_df.merge(fut_df, on="Ticker", how="left")
 
-    thesis.append(f"Trend: **{row['Trend']}** | ADX: **{row['ADX']:.1f}**")
+    df = scanner.add_futures_scoring(df)
 
-    if pd.notna(row.get("F1_Signal")):
-        thesis.append(f"**Futures:** {row['F1_Signal']} (adds to score)")
-
-    thesis.append(
-        f"**Conviction (ST):** {row['ST']} | Score: {row['Score']:.1f} → **{row['Verdict']}**"
-    )
-
-    recommendation = (
-        "✅ **High-conviction** — consider entry (ST = Elite/High + futures support)."
-        if row["Verdict"] in ["STRONG BUY", "WEAK BUY"] and row["ST"] in ["Elite", "High"]
-        else "✅ **Consider entry** with tight risk."
-        if row["Verdict"] in ["STRONG BUY", "WEAK BUY"]
-        else "⚠️ **Avoid / Reduce**"
-        if row["Verdict"] in ["WEAK SELL", "STRONG SELL"]
-        else "⏸️ **Wait for confirmation**"
-    )
-
-    return "\n\n".join(thesis), recommendation
+    return df.sort_values("Final_Score", ascending=False).reset_index(drop=True)
 
 # ==========================
 # MAIN APP
@@ -154,22 +152,31 @@ with st.expander("📘 Interpretation Guide", expanded=False):
         - Strong verdict + (Compression YES or ADX > 25) + Long Buildup/Short Covering in futures
     """)
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def cached_scanner(_use_all_fno: bool):
-    scanner.USE_ALL_FNO = _use_all_fno
-    return run_scanner()
+# ==========================
+# RUN + CACHE CONTROL
+# ==========================
+col1, col2 = st.columns([1, 4])
+with col1:
+    run_now = st.button("🔄 Run Scanner Now", type="primary")
+with col2:
+    clear_cache = st.button("🗑️ Clear Cache (Force Fresh Data)")
 
-run_now = st.button("🔄 Run Scanner Now", type="primary")
+if clear_cache:
+    st.cache_data.clear()
+    st.success("Cache cleared — next run will fetch fresh data")
+    st.rerun()
 
 if run_now or ("last_run" not in st.session_state):
-    cached_scanner.clear()
+    run_scanner_optimized.clear()  # Clear only scanner cache
     mode = "ALL F&O (~200+)" if use_all_fno else "Core Stocks"
+    start_time = time.time()
     with st.spinner(f"Running scanner ({mode})..."):
-        report = cached_scanner(use_all_fno)
+        report = run_scanner_optimized(use_all_fno)
+    runtime = time.time() - start_time
     st.session_state.last_run = datetime.now().strftime("%Y-%m-%d %H:%M")
-    st.rerun()
+    st.success(f"Scan complete in {runtime:.1f}s — {len(report)} symbols")
 else:
-    report = cached_scanner(use_all_fno)
+    report = run_scanner_optimized(use_all_fno)
 
 # ==========================
 # DISPLAY RESULTS
@@ -178,27 +185,31 @@ if report.empty:
     st.info("No data — run the scanner.")
 else:
     mode = "ALL F&O (~200+)" if use_all_fno else "Core Stocks"
-    st.success(f"Scan complete — {len(report)} symbols ({mode})")
 
-    # Rename & map for space and clarity
-    report = report.rename(columns={
+    # Search bar
+    search_term = st.text_input("🔍 Search Ticker", "")
+    display_df = report
+    if search_term:
+        display_df = display_df[display_df["Ticker"].str.contains(search_term.upper(), case=False)]
+
+    # Rename & map
+    display_df = display_df.rename(columns={
         "Strength_Tier": "ST",
         "Compression": "Comp",
         "Final_Score": "Score",
         "Final_Verdict": "Verdict",
         "Market_Regime": "Regime"
     })
-
     st_map = {"S": "Elite", "A": "High", "B": "Good", "C": "Avg"}
-    report["ST"] = report["ST"].map(st_map)
+    display_df["ST"] = display_df["ST"].map(st_map)
 
-    # Formatting (fixed OI% decimals)
+    # Formatting
     format_dict = {}
-    for col in report.columns:
-        if pd.api.types.is_float_dtype(report[col]):
+    for col in display_df.columns:
+        if pd.api.types.is_float_dtype(display_df[col]):
             if col in ["RSI", "ADX"]:
                 format_dict[col] = "{:.1f}"
-            elif "OI_%" in col:  # F1_OI_%, F2_OI_%
+            elif "OI_%" in col:
                 format_dict[col] = "{:.2f}"
             elif col in ["Score", "ATR%", "Vol_Ratio", "Futures_Score"] or "Close" in col:
                 format_dict[col] = "{:.2f}"
@@ -216,15 +227,14 @@ else:
             return ['font-weight: bold'] * len(row)
         return [''] * len(row)
 
-    styled = report.style.format(format_dict).apply(highlight_row, axis=1)
+    styled = display_df.style.format(format_dict).apply(highlight_row, axis=1)
 
-    # Pinned essential columns
     pinned = ["Ticker", "Verdict", "Score", "ST", "Breakout", "Comp"]
 
     st.dataframe(
         styled,
         hide_index=True,
-        column_config={c: st.column_config.Column(pinned=True) for c in pinned if c in report.columns}
+        column_config={c: st.column_config.Column(pinned=True) for c in pinned if c in display_df.columns}
     )
 
     # Metrics
