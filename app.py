@@ -179,6 +179,52 @@ else:
     report = run_scanner_optimized(use_all_fno)
 
 # ==========================
+# HELPERS (updated for renamed columns)
+# ==========================
+def build_trade_thesis(row):
+    thesis = []
+
+    thesis.append(
+        f"**Market Regime:** {row['Regime']} — "
+        f"{'supports' if row['Regime']=='RISK_ON' else 'does not favor'} long trades."
+    )
+
+    if row["Breakout"] == "LONG":
+        thesis.append("**Donchian breakout bullish** (above 20-day high).")
+    elif row["Breakout"] == "SHORT":
+        thesis.append("**Donchian breakout bearish** (below 20-day low).")
+
+    ha_desc = row['HA']
+    if ha_desc == "DOJI":
+        thesis.append("Heikin Ashi today: **DOJI** → indecision.")
+    else:
+        thesis.append(f"Heikin Ashi today: **{ha_desc}** → momentum.")
+
+    if row.get("Futures_Score", 0) > 0.5:
+        thesis.append("**Reversal pattern** detected (strong candle after Doji/opposite).")
+
+    thesis.append(f"Trend: **{row['Trend']}** | ADX: **{row['ADX']:.1f}**")
+
+    if pd.notna(row.get("F1_Signal")):
+        thesis.append(f"**Futures:** {row['F1_Signal']} (adds to score)")
+
+    thesis.append(
+        f"**Conviction (ST):** {row['ST']} | Score: {row['Score']:.1f} → **{row['Verdict']}**"
+    )
+
+    recommendation = (
+        "✅ **High-conviction** — consider entry (ST = Elite/High + futures support)."
+        if row["Verdict"] in ["STRONG BUY", "WEAK BUY"] and row["ST"] in ["Elite", "High"]
+        else "✅ **Consider entry** with tight risk."
+        if row["Verdict"] in ["STRONG BUY", "WEAK BUY"]
+        else "⚠️ **Avoid / Reduce**"
+        if row["Verdict"] in ["WEAK SELL", "STRONG SELL"]
+        else "⏸️ **Wait for confirmation**"
+    )
+
+    return "\n\n".join(thesis), recommendation
+    
+# ==========================
 # DISPLAY RESULTS
 # ==========================
 if report.empty:
