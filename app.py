@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime, date
 import time
 import scanner
-from scanner import run_scanner, run_futures  # Import run_futures for caching
+from scanner import run_scanner, run_futures
 
 # ==========================
 # PAGE CONFIG
@@ -58,20 +58,21 @@ with st.sidebar:
         st.caption(st.session_state.last_run)
 
 # ==========================
-# CACHED FUTURES (24h cache)
+# CACHED FUTURES
 # ==========================
-@st.cache_data(ttl=86400, show_spinner=False)
+@st.cache_data(ttl=86400)
 def cached_run_futures(_tickers):
     return run_futures(_tickers)
 
 # ==========================
-# OPTIMIZED SCANNER (uses cached futures)
+# SCANNER WITH CACHED FUTURES + RATE LIMIT HANDLING
 # ==========================
 @st.cache_data(ttl=3600, show_spinner=False)
 def run_scanner_optimized(_use_all_fno: bool):
     scanner.USE_ALL_FNO = _use_all_fno
     symbol_map = scanner.build_ticker_universe()
 
+    # Safe Nifty download with fallback
     nifty_df = scanner.safe_yf_download("^NSEI")
     market_regime = "NEUTRAL"
     nifty_return = None
@@ -84,6 +85,8 @@ def run_scanner_optimized(_use_all_fno: bool):
                 nifty_return = (nifty_df["Close"].iloc[-1] / nifty_df["Close"].iloc[-60]) - 1
         except:
             pass
+    else:
+        st.warning("⚠️ Nifty data rate-limited — using NEUTRAL regime (try again later)")
 
     results = []
     for name, sym in symbol_map.items():
@@ -93,7 +96,7 @@ def run_scanner_optimized(_use_all_fno: bool):
 
     cash_df = pd.DataFrame(results)
     tickers_list = list(symbol_map.keys())
-    fut_df = cached_run_futures(tickers_list)  # Cached futures
+    fut_df = cached_run_futures(tickers_list)
     df = cash_df.merge(fut_df, on="Ticker", how="left")
 
     df = scanner.add_futures_scoring(df)
@@ -106,9 +109,6 @@ def run_scanner_optimized(_use_all_fno: bool):
 st.title("📊 Donchian + Reversal Scanner")
 st.caption("Early reversal detection • Futures confirmation • Conviction ranked")
 
-# ==========================
-# CONCISE GUIDE (previous style + new features)
-# ==========================
 with st.expander("📘 Interpretation Guide", expanded=False):
     st.markdown("""
         **How to Read This Scanner**:
@@ -167,7 +167,7 @@ if clear_cache:
     st.rerun()
 
 if run_now or ("last_run" not in st.session_state):
-    run_scanner_optimized.clear()  # Clear only scanner cache
+    run_scanner_optimized.clear()
     mode = "ALL F&O (~200+)" if use_all_fno else "Core Stocks"
     start_time = time.time()
     with st.spinner(f"Running scanner ({mode})..."):
@@ -188,11 +188,11 @@ else:
 
     # Search bar
     search_term = st.text_input("🔍 Search Ticker", "")
-    display_df = report
+    display_df = report.copy()
     if search_term:
         display_df = display_df[display_df["Ticker"].str.contains(search_term.upper(), case=False)]
 
-    # Rename & map
+    # Rename & map (moved BEFORE metrics)
     display_df = display_df.rename(columns={
         "Strength_Tier": "ST",
         "Compression": "Comp",
@@ -202,6 +202,13 @@ else:
     })
     st_map = {"S": "Elite", "A": "High", "B": "Good", "C": "Avg"}
     display_df["ST"] = display_df["ST"].map(st_map)
+
+    # Metrics (now using renamed columns)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Symbols", len(report))
+    col2.metric("STRONG BUY", (report["Final_Score"] >= 6).sum())
+    col3.metric("Elite ST", (report["ST"].map({"Elite": "S", "High": "A", "Good": "B", "Avg": "C"}) == "S").sum())
+    col4.metric("Comp = YES", (report["Compression"] == "YES").sum())
 
     # Formatting
     format_dict = {}
@@ -236,13 +243,6 @@ else:
         hide_index=True,
         column_config={c: st.column_config.Column(pinned=True) for c in pinned if c in display_df.columns}
     )
-
-    # Metrics
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Symbols", len(report))
-    col2.metric("STRONG BUY", (report["Score"] >= 6).sum())
-    col3.metric("Elite ST", (report["ST"] == "Elite").sum())
-    col4.metric("Comp = YES", (report["Comp"] == "YES").sum())
 
     # Explainer
     st.markdown("---")
