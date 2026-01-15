@@ -414,6 +414,16 @@ def run_scanner():
 
     cash_df = pd.DataFrame(results)
     fut_df = run_futures(list(symbol_map.keys()))
+
+    print("=== cash_df columns ===")
+    print(cash_df.columns.tolist())
+    print("\n=== fut_df columns ===")
+    print(fut_df.columns.tolist())
+    print("\n=== First few rows of cash_df ===")
+    print(cash_df.head(2))
+    print("\n=== First few rows of fut_df ===")
+    print(fut_df.head(2))
+    
     df = cash_df.merge(fut_df, on="Ticker", how="left")
 
     df = add_futures_scoring(df)
